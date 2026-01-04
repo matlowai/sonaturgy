@@ -23,32 +23,32 @@ window.StudioBridge = {
     BASE_URL: 'https://localhost:21573',
     token: null,
     connected: false,
+    serverVersion: null,
 
-    // Connect to Studio with token
+    // Connect to Studio: check server health via /api/version and save token
     async connect(token) {
         if (!token || !token.trim()) {
             return '❌ Please enter a token';
         }
-        this.token = token.trim();
         try {
-            const resp = await fetch(this.BASE_URL + '/bridge/token', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': 'Bearer ' + this.token
-                },
-                body: JSON.stringify({ token: this.token })
+            // Check if server is running via /api/version (no auth required)
+            const resp = await fetch(this.BASE_URL + '/api/version', {
+                method: 'GET'
             });
-            if (resp.ok) {
-                this.connected = true;
-                return '✅ Connected to ACE Studio';
-            } else {
+            if (!resp.ok) {
                 this.connected = false;
-                return '❌ Connection failed: ' + resp.status;
+                return '❌ Server not responding: ' + resp.status;
             }
+            const data = await resp.json();
+            // Save token and server info
+            this.token = token.trim();
+            this.connected = true;
+            this.serverVersion = data.version || 'unknown';
+            return '✅ Connected to ACE Studio (v' + (data.appVersion || data.version || '?') + ')';
         } catch (e) {
             this.connected = false;
-            if (e.message.includes('fetch')) {
+            this.token = null;
+            if (e.message.includes('fetch') || e.name === 'TypeError') {
                 return '❌ Cannot reach Studio. Is it running? (Check localhost:21573)';
             }
             return '❌ Error: ' + e.message;
@@ -61,26 +61,32 @@ window.StudioBridge = {
             return { error: '❌ Not connected. Please connect first.' };
         }
         try {
-            // Get clipboard content
-            const resp = await fetch(this.BASE_URL + '/bridge/clipboard', {
+            // First check if clipboard has audio
+            const checkResp = await fetch(this.BASE_URL + '/api/audio/clipboard/check', {
                 method: 'GET',
                 headers: { 'Authorization': 'Bearer ' + this.token }
             });
-            if (!resp.ok) {
-                return { error: '❌ Failed to get clipboard: ' + resp.status };
+            if (!checkResp.ok) {
+                return { error: '❌ Failed to check clipboard: ' + checkResp.status };
             }
-            const data = await resp.json();
-            if (!data.audio_url) {
-                return { error: '❌ No audio in clipboard' };
+            const checkData = await checkResp.json();
+            if (!checkData.hasAudio) {
+                return { error: '❌ No audio in Studio clipboard' };
             }
-            // Return the audio URL for Gradio to fetch
-            return { url: data.audio_url, message: '✅ Got audio from Studio' };
+            // Return the clipboard data URL for Gradio to fetch
+            const audioUrl = this.BASE_URL + '/api/audio/clipboard/data';
+            return { 
+                url: audioUrl, 
+                message: '✅ Got audio from Studio (' + checkData.filename + ')',
+                // Include auth header info for fetching
+                headers: { 'Authorization': 'Bearer ' + this.token }
+            };
         } catch (e) {
             return { error: '❌ Error: ' + e.message };
         }
     },
 
-    // Send audio to Studio
+    // Send audio to Studio via import
     async sendAudio(audioUrl, filename) {
         if (!this.token) {
             return '❌ Not connected. Please connect first.';
@@ -89,30 +95,34 @@ window.StudioBridge = {
             return '❌ No audio to send';
         }
         try {
-            // Import audio to Studio
-            const resp = await fetch(this.BASE_URL + '/bridge/audio/import', {
+            // Import audio to Studio via POST /api/audio/import
+            const resp = await fetch(this.BASE_URL + '/api/audio/import', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                     'Authorization': 'Bearer ' + this.token
                 },
                 body: JSON.stringify({
-                    src: audioUrl,
-                    name: filename || 'ACEStep_Audio'
+                    url: audioUrl,
+                    filename: filename || 'ACEStep_Audio.mp3'
                 })
             });
             if (!resp.ok) {
                 return '❌ Failed to send: ' + resp.status;
             }
             const data = await resp.json();
-            // Poll for import completion
+            if (!data.success) {
+                return '❌ Import failed: ' + (data.error || 'Unknown error');
+            }
+            // Poll for import completion via GET /api/audio/import/status?id=taskId
             const taskId = data.taskId;
             if (taskId) {
-                for (let i = 0; i < 30; i++) {
+                for (let i = 0; i < 60; i++) {
                     await new Promise(r => setTimeout(r, 500));
-                    const statusResp = await fetch(this.BASE_URL + '/bridge/audio/import/' + taskId, {
-                        headers: { 'Authorization': 'Bearer ' + this.token }
-                    });
+                    const statusResp = await fetch(
+                        this.BASE_URL + '/api/audio/import/status?id=' + taskId, 
+                        { headers: { 'Authorization': 'Bearer ' + this.token } }
+                    );
                     if (statusResp.ok) {
                         const status = await statusResp.json();
                         if (status.status === 'completed') {
@@ -120,9 +130,10 @@ window.StudioBridge = {
                         } else if (status.status === 'failed') {
                             return '❌ Import failed: ' + (status.error || 'Unknown error');
                         }
+                        // Still downloading/processing, continue polling
                     }
                 }
-                return '⏳ Import started (taskId: ' + taskId + ')';
+                return '⏳ Import in progress (taskId: ' + taskId + ')';
             }
             return '✅ Audio sent to Studio';
         } catch (e) {
