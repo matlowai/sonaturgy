@@ -81,12 +81,18 @@ window.StudioBridge = {
             if (!audioResp.ok) {
                 return { error: '❌ Failed to get audio data: ' + audioResp.status };
             }
-            // Convert to blob and create a blob URL that Gradio can use
+            // Convert blob to base64 data URL
             const blob = await audioResp.blob();
-            const blobUrl = URL.createObjectURL(blob);
+            const filename = checkData.filename || 'studio_audio.wav';
+            const dataUrl = await new Promise((resolve) => {
+                const reader = new FileReader();
+                reader.onloadend = () => resolve(reader.result);
+                reader.readAsDataURL(blob);
+            });
             return { 
-                url: blobUrl, 
-                message: '✅ Got audio from Studio (' + checkData.filename + ')'
+                dataUrl: dataUrl,
+                filename: filename,
+                message: '✅ Got audio from Studio (' + filename + ')'
             };
         } catch (e) {
             return { error: '❌ Error: ' + e.message };
@@ -163,13 +169,16 @@ async (token) => {
 """
 
 JS_GET_AUDIO_FROM_STUDIO = """
-async () => {
+async (audioTemp, status) => {
     const result = await window.StudioBridge.getAudio();
     if (result.error) {
         return [null, result.error];
     }
-    // Return the URL - Gradio will fetch it
-    return [result.url, result.message];
+    // Return simple dict format for JSON component
+    return [{
+        dataUrl: result.dataUrl,
+        filename: result.filename
+    }, result.message];
 }
 """
 

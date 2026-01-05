@@ -4,8 +4,12 @@ Gradio-based UI for the ACE-Step Playground.
 """
 import os
 import sys
+import base64
+import tempfile
 import gradio as gr
-from typing import Optional, List
+import numpy as np
+import soundfile as sf
+from typing import Optional, List, Union, Tuple
 
 # Add project root to sys.path
 current_file = os.path.abspath(__file__)
@@ -20,6 +24,114 @@ from studio_bridge import (
     JS_GET_AUDIO_FROM_STUDIO,
     JS_SEND_AUDIO_TO_STUDIO,
 )
+
+
+# =============================================================================
+# Audio Input Processing
+# =============================================================================
+
+def audio_to_filepath(audio_input) -> Optional[str]:
+    """
+    Convert various audio input formats to a file path.
+    
+    Handles:
+    - None -> None
+    - str (file path) -> str
+    - tuple (sample_rate, numpy_array) -> temp file path
+    - dict with 'url' containing data URL -> temp file path
+    """
+    if audio_input is None:
+        return None
+    
+    # Already a file path string
+    if isinstance(audio_input, str):
+        # Check if it's a data URL
+        if audio_input.startswith('data:'):
+            return dataurl_to_filepath(audio_input)
+        return audio_input
+    
+    # Numpy array tuple from gr.Audio (sample_rate, data)
+    if isinstance(audio_input, tuple) and len(audio_input) == 2:
+        sample_rate, data = audio_input
+        if isinstance(data, np.ndarray):
+            tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+            sf.write(tmp.name, data, sample_rate)
+            return tmp.name
+    
+    # Dict format from JS (Gradio Audio component object)
+    if isinstance(audio_input, dict):
+        # Check for data URL in 'url' field
+        url = audio_input.get('url') or audio_input.get('path')
+        if url and isinstance(url, str):
+            if url.startswith('data:'):
+                return dataurl_to_filepath(url)
+            return url
+    
+    return None
+
+
+def dataurl_to_filepath(data_url: str) -> str:
+    """Convert a base64 data URL to a temporary file path."""
+    # Parse data URL: data:audio/wav;base64,xxxxx
+    header, encoded = data_url.split(",", 1)
+    audio_bytes = base64.b64decode(encoded)
+    
+    # Determine extension from MIME type
+    ext = ".wav"
+    if "audio/mp3" in header or "audio/mpeg" in header:
+        ext = ".mp3"
+    elif "audio/flac" in header:
+        ext = ".flac"
+    elif "audio/ogg" in header:
+        ext = ".ogg"
+    
+    tmp = tempfile.NamedTemporaryFile(suffix=ext, delete=False)
+    tmp.write(audio_bytes)
+    tmp.close()
+    return tmp.name
+
+
+def convert_studio_audio_to_numpy(audio_data, status_msg) -> Tuple[Optional[Tuple[int, np.ndarray]], str]:
+    """
+    Convert Studio audio (dict with dataUrl from JS) to numpy format for gr.Audio(type='numpy').
+
+    This is a post-processing function for Studio Bridge JS callbacks.
+    JS returns dict with 'dataUrl' field containing base64 data URL.
+
+    Args:
+        audio_data: Audio data from JS (dict with 'dataUrl' field)
+        status_msg: Status message from JS
+
+    Returns:
+        Tuple of (audio_numpy_tuple, status_message)
+    """
+    if audio_data is None:
+        return None, status_msg
+
+    # If it's already a numpy tuple, return as-is
+    if isinstance(audio_data, tuple) and len(audio_data) == 2:
+        return audio_data, status_msg
+
+    # Extract data URL from dict
+    data_url = None
+    if isinstance(audio_data, dict):
+        data_url = audio_data.get('dataUrl') or audio_data.get('url')
+    elif isinstance(audio_data, str):
+        data_url = audio_data
+
+    if not data_url:
+        return None, status_msg
+
+    # Convert data URL to file path
+    if not data_url.startswith('data:'):
+        return None, "Invalid data URL format"
+
+    try:
+        filepath = dataurl_to_filepath(data_url)
+        audio_np, sr = sf.read(filepath)
+        return (sr, audio_np), status_msg
+    except Exception as e:
+        return None, f"Error converting audio: {str(e)}"
 
 
 # =============================================================================
@@ -137,6 +249,8 @@ def create_ui(handler):
                 interactive=False,
                 placeholder="Not connected"
             )
+            # Hidden JSON component for transferring audio data from JS to Python
+            studio_audio_temp = gr.JSON(visible=False)
         
         with gr.Tabs():
             # =================================================================
@@ -439,7 +553,7 @@ def create_ui(handler):
                                 gr.Markdown("#### Reference Audio")
                                 reference_audio = gr.Audio(
                                     label="Reference Audio (for style guidance)",
-                                    type="filepath"
+                                    type="numpy"
                                 )
                                 get_ref_from_studio_btn = gr.Button(
                                     "📥 Get from Studio",
@@ -451,7 +565,7 @@ def create_ui(handler):
                                 gr.Markdown("#### Source Audio")
                                 source_audio = gr.Audio(
                                     label="Source Audio (to be processed)",
-                                    type="filepath"
+                                    type="numpy"
                                 )
                                 get_src_from_studio_btn = gr.Button(
                                     "📥 Get from Studio",
@@ -654,6 +768,10 @@ def create_ui(handler):
             # Determine actual seed
             actual_seed = -1 if random_seed else int(seed_val) if seed_val is not None else -1
             
+            # Convert audio inputs to file paths
+            ref_audio_path = audio_to_filepath(ref_audio)
+            src_audio_path = audio_to_filepath(src_audio)
+            
             return handler.generate_audio(
                 task_type=task,
                 caption=caption,
@@ -662,8 +780,8 @@ def create_ui(handler):
                 inference_steps=int(steps),
                 guidance_scale=guidance,
                 seed=actual_seed,
-                reference_audio_path=ref_audio,
-                source_audio_path=src_audio,
+                reference_audio_path=ref_audio_path,
+                source_audio_path=src_audio_path,
                 repainting_start=repaint_start,
                 repainting_end=repaint_end,
                 audio_cover_strength=cover_strength,
@@ -708,19 +826,26 @@ def create_ui(handler):
             js=JS_CONNECT_STUDIO
         )
         
-        # Get from Studio buttons - uses frontend JS
+        # Get from Studio buttons - uses frontend JS with Python post-processing
+        # In Gradio 6.x, when using both js= and fn=, the JS function receives the inputs
+        # and its return values are passed to fn as inputs, then fn's outputs go to the output components
+
+        # For reference audio
         get_ref_from_studio_btn.click(
-            fn=None,  # Placeholder (JS handles the logic)
-            inputs=[],
+            fn=convert_studio_audio_to_numpy,
+            inputs=[studio_audio_temp, studio_connection_status],
             outputs=[reference_audio, studio_connection_status],
-            js=JS_GET_AUDIO_FROM_STUDIO
+            js=JS_GET_AUDIO_FROM_STUDIO,
+            show_progress=True
         )
-        
+
+        # For source audio
         get_src_from_studio_btn.click(
-            fn=None,  # Placeholder (JS handles the logic)
-            inputs=[],
+            fn=convert_studio_audio_to_numpy,
+            inputs=[studio_audio_temp, studio_connection_status],
             outputs=[source_audio, studio_connection_status],
-            js=JS_GET_AUDIO_FROM_STUDIO
+            js=JS_GET_AUDIO_FROM_STUDIO,
+            show_progress=True
         )
         
         # Send to Studio buttons - uses frontend JS
