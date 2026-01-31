@@ -59,6 +59,9 @@ DEFAULT_AUDIO_FORMAT = "mp3"
 # Supported audio formats for input/output
 SUPPORTED_AUDIO_FORMATS = {"mp3", "wav", "flac", "ogg", "m4a", "aac"}
 
+# Default timesteps for turbo model (8 steps)
+DEFAULT_TIMESTEPS_TURBO = [0.97, 0.76, 0.615, 0.5, 0.395, 0.28, 0.18, 0.085, 0.0]
+
 
 # =============================================================================
 # Helper Functions
@@ -121,18 +124,55 @@ def _base64_to_temp_file(b64_data: str, audio_format: str = "mp3") -> str:
     return path
 
 
-def _parse_messages(messages: List[Any]) -> Tuple[str, str, Optional[str], Optional[str]]:
+import re
+
+def _extract_tagged_content(text: str) -> Tuple[Optional[str], Optional[str], str]:
     """
-    Parse chat messages to extract prompt, lyrics, and audio references.
+    Extract content from <prompt> and <lyrics> tags.
 
     Returns:
-        (prompt, lyrics, reference_audio_path, system_instruction)
+        (prompt, lyrics, remaining_text)
+        - prompt: Content inside <prompt>...</prompt> or None
+        - lyrics: Content inside <lyrics>...</lyrics> or None
+        - remaining_text: Text after removing tagged content
+    """
+    prompt = None
+    lyrics = None
+    remaining = text
+
+    # Extract <prompt>...</prompt>
+    prompt_match = re.search(r'<prompt>(.*?)</prompt>', text, re.DOTALL | re.IGNORECASE)
+    if prompt_match:
+        prompt = prompt_match.group(1).strip()
+        remaining = remaining.replace(prompt_match.group(0), '').strip()
+
+    # Extract <lyrics>...</lyrics>
+    lyrics_match = re.search(r'<lyrics>(.*?)</lyrics>', text, re.DOTALL | re.IGNORECASE)
+    if lyrics_match:
+        lyrics = lyrics_match.group(1).strip()
+        remaining = remaining.replace(lyrics_match.group(0), '').strip()
+
+    return prompt, lyrics, remaining
+
+
+def _parse_messages(messages: List[Any]) -> Tuple[str, str, Optional[str], Optional[str], Optional[str]]:
+    """
+    Parse chat messages to extract prompt, lyrics, sample_query and audio references.
+
+    Supports two modes:
+    1. Tagged mode: Use <prompt>...</prompt> and <lyrics>...</lyrics> tags
+    2. Heuristic mode: Auto-detect based on content structure
+
+    Returns:
+        (prompt, lyrics, reference_audio_path, system_instruction, sample_query)
+        - sample_query is set when input doesn't look like lyrics and has no tags
     """
     prompt_parts = []
     lyrics = ""
+    sample_query = None
     reference_audio_path = None
     system_instruction = None
-    temp_files = []
+    has_tags = False
 
     for msg in messages:
         role = msg.role
@@ -149,12 +189,23 @@ def _parse_messages(messages: List[Any]) -> Tuple[str, str, Optional[str], Optio
 
         # Parse user message content
         if isinstance(content, str):
-            # Simple text content - try to detect lyrics
             text = content.strip()
-            if _looks_like_lyrics(text):
-                lyrics = text
+            # Try to extract tagged content first
+            tagged_prompt, tagged_lyrics, remaining = _extract_tagged_content(text)
+            if tagged_prompt is not None or tagged_lyrics is not None:
+                has_tags = True
+                if tagged_prompt:
+                    prompt_parts.append(tagged_prompt)
+                if tagged_lyrics:
+                    lyrics = tagged_lyrics
+                if remaining:
+                    prompt_parts.append(remaining)
             else:
-                prompt_parts.append(text)
+                # No tags - use heuristic detection
+                if _looks_like_lyrics(text):
+                    lyrics = text
+                else:
+                    prompt_parts.append(text)
 
         elif isinstance(content, list):
             # Multi-part content
@@ -164,7 +215,16 @@ def _parse_messages(messages: List[Any]) -> Tuple[str, str, Optional[str], Optio
 
                     if part_type == "text":
                         text = part.get("text", "").strip()
-                        if _looks_like_lyrics(text):
+                        tagged_prompt, tagged_lyrics, remaining = _extract_tagged_content(text)
+                        if tagged_prompt is not None or tagged_lyrics is not None:
+                            has_tags = True
+                            if tagged_prompt:
+                                prompt_parts.append(tagged_prompt)
+                            if tagged_lyrics:
+                                lyrics = tagged_lyrics
+                            if remaining:
+                                prompt_parts.append(remaining)
+                        elif _looks_like_lyrics(text):
                             lyrics = text
                         else:
                             prompt_parts.append(text)
@@ -186,7 +246,16 @@ def _parse_messages(messages: List[Any]) -> Tuple[str, str, Optional[str], Optio
                     # Pydantic model
                     if part.type == "text":
                         text = getattr(part, "text", "").strip()
-                        if _looks_like_lyrics(text):
+                        tagged_prompt, tagged_lyrics, remaining = _extract_tagged_content(text)
+                        if tagged_prompt is not None or tagged_lyrics is not None:
+                            has_tags = True
+                            if tagged_prompt:
+                                prompt_parts.append(tagged_prompt)
+                            if tagged_lyrics:
+                                lyrics = tagged_lyrics
+                            if remaining:
+                                prompt_parts.append(remaining)
+                        elif _looks_like_lyrics(text):
                             lyrics = text
                         else:
                             prompt_parts.append(text)
@@ -205,7 +274,14 @@ def _parse_messages(messages: List[Any]) -> Tuple[str, str, Optional[str], Optio
                                     pass
 
     prompt = " ".join(prompt_parts).strip()
-    return prompt, lyrics, reference_audio_path, system_instruction
+
+    # Determine if we should use sample mode
+    # Use sample mode when: no tags, no lyrics detected, and we have text input
+    if not has_tags and not lyrics and prompt:
+        sample_query = prompt
+        prompt = ""
+
+    return prompt, lyrics, reference_audio_path, system_instruction, sample_query
 
 
 def _looks_like_lyrics(text: str) -> bool:
@@ -334,6 +410,11 @@ def create_openrouter_router(app_state_getter) -> APIRouter:
         """
         state = app_state_getter()
 
+        # Debug: print state info
+        initialized = getattr(state, "_initialized", False)
+        init_error = getattr(state, "_init_error", None)
+        print(f"[OpenRouter] chat_completions called, _initialized={initialized}, _init_error={init_error}")
+
         # Parse request body
         try:
             body = await request.json()
@@ -345,22 +426,22 @@ def create_openrouter_router(app_state_getter) -> APIRouter:
             )
 
         # Check if model is initialized
-        if not getattr(state, "_initialized", False):
+        if not initialized:
             raise HTTPException(
                 status_code=503,
-                detail="Model not initialized"
+                detail=f"Model not initialized. init_error={init_error}"
             )
 
         # Parse model name
         model_name = _parse_model_name(req.model)
 
-        # Parse messages to extract prompt, lyrics, and audio
-        prompt, lyrics, reference_audio_path, system_instruction = _parse_messages(req.messages)
+        # Parse messages to extract prompt, lyrics, sample_query and audio
+        prompt, lyrics, reference_audio_path, system_instruction, sample_query = _parse_messages(req.messages)
 
-        if not prompt and not lyrics:
+        if not prompt and not lyrics and not sample_query:
             raise HTTPException(
                 status_code=400,
-                detail="No valid prompt or lyrics found in messages"
+                detail="No valid prompt, lyrics or sample query found in messages"
             )
 
         # Extract audio config
@@ -375,6 +456,7 @@ def create_openrouter_router(app_state_getter) -> APIRouter:
             reference_audio_path=reference_audio_path,
             audio_config=audio_config,
             model_name=model_name,
+            sample_query=sample_query,
         )
 
         # Handle streaming vs non-streaming
@@ -396,6 +478,7 @@ def _build_generation_params(
     reference_audio_path: Optional[str],
     audio_config: AudioConfig,
     model_name: str,
+    sample_query: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Build ACE-Step generation parameters from OpenRouter request."""
     params = {
@@ -405,6 +488,10 @@ def _build_generation_params(
         "audio_format": audio_config.format or DEFAULT_AUDIO_FORMAT,
         "batch_size": req.batch_size or DEFAULT_BATCH_SIZE,
     }
+
+    # Sample mode: use LLM to generate prompt and lyrics from query
+    if sample_query:
+        params["sample_query"] = sample_query
 
     # Audio config parameters
     if audio_config.duration:
@@ -572,15 +659,19 @@ async def _stream_generation(
         if result.get("success"):
             audio_paths = result.get("audio_paths", [])
             audio_outputs = []
+            print(f"[OpenRouter] Generation success, audio_paths={audio_paths}")
 
             for path in audio_paths:
+                print(f"[OpenRouter] Processing path: {path}, exists={os.path.exists(path) if path else False}")
                 if path and os.path.exists(path):
                     b64_url = _audio_to_base64_url(path, audio_format)
+                    print(f"[OpenRouter] b64_url length: {len(b64_url) if b64_url else 0}")
                     if b64_url:
                         audio_outputs.append(AudioOutput(
                             audio_url=AudioOutputUrl(url=b64_url)
                         ))
 
+            print(f"[OpenRouter] audio_outputs count: {len(audio_outputs)}")
             yield _make_chunk(DeltaContent(
                 content="\n\nGeneration complete.",
                 audio=audio_outputs if audio_outputs else None,
@@ -640,14 +731,47 @@ def _run_generation(state: Any, gen_params: Dict[str, Any]) -> Dict[str, Any]:
                 if config_path3 and model_name in config_path3:
                     selected_handler = state.handler3
 
-        # Determine if instrumental
+        # Handle sample mode: use LLM to generate prompt and lyrics from query
+        sample_query = gen_params.get("sample_query")
+        prompt = gen_params.get("prompt", "")
         lyrics = gen_params.get("lyrics", "")
+
+        if sample_query and llm_handler and llm_initialized:
+            from acestep.inference import create_sample
+            sample_result = create_sample(
+                llm_handler=llm_handler,
+                query=sample_query,
+                instrumental=gen_params.get("instrumental", False),
+                vocal_language=gen_params.get("vocal_language"),
+                temperature=gen_params.get("lm_temperature", 0.85),
+                top_p=gen_params.get("lm_top_p", 0.9),
+                top_k=gen_params.get("lm_top_k"),
+            )
+            if sample_result.success:
+                prompt = sample_result.caption or ""
+                lyrics = sample_result.lyrics or ""
+                # Also use generated metadata if not explicitly provided
+                if not gen_params.get("bpm") and sample_result.bpm:
+                    gen_params["bpm"] = sample_result.bpm
+                if not gen_params.get("audio_duration") and sample_result.duration:
+                    gen_params["audio_duration"] = sample_result.duration
+                if not gen_params.get("key_scale") and sample_result.keyscale:
+                    gen_params["key_scale"] = sample_result.keyscale
+                if not gen_params.get("time_signature") and sample_result.timesignature:
+                    gen_params["time_signature"] = sample_result.timesignature
+                if not gen_params.get("vocal_language") and sample_result.language:
+                    gen_params["vocal_language"] = sample_result.language
+
+        # Determine if instrumental
         instrumental = _is_instrumental(lyrics)
+
+        # Get timesteps - use default for turbo model if not provided
+        timesteps = gen_params.get("timesteps", DEFAULT_TIMESTEPS_TURBO)
 
         # Build GenerationParams
         params = GenerationParams(
             task_type=gen_params.get("task_type", "text2music"),
-            caption=gen_params.get("prompt", ""),
+            caption=prompt,
             lyrics=lyrics,
             instrumental=instrumental,
             vocal_language=gen_params.get("vocal_language", "en"),
@@ -663,6 +787,7 @@ def _run_generation(state: Any, gen_params: Dict[str, Any]) -> Dict[str, Any]:
             lm_temperature=gen_params.get("lm_temperature", 0.85),
             lm_top_p=gen_params.get("lm_top_p", 0.9),
             lm_top_k=gen_params.get("lm_top_k", 0),
+            timesteps=timesteps,
         )
 
         # Build GenerationConfig
@@ -676,6 +801,7 @@ def _run_generation(state: Any, gen_params: Dict[str, Any]) -> Dict[str, Any]:
         save_dir = getattr(state, "temp_audio_dir", None)
         if not save_dir:
             save_dir = tempfile.mkdtemp(prefix="openrouter_audio_")
+        print(f"[OpenRouter] save_dir={save_dir}")
 
         # Run generation
         result = generate_music(
@@ -694,7 +820,14 @@ def _run_generation(state: Any, gen_params: Dict[str, Any]) -> Dict[str, Any]:
             }
 
         # Extract audio paths
+        print(f"[OpenRouter] result.success={result.success}")
+        print(f"[OpenRouter] result.status_message={result.status_message}")
+        print(f"[OpenRouter] result.audios count={len(result.audios)}")
+        for i, audio in enumerate(result.audios):
+            print(f"[OpenRouter] audio[{i}] path={audio.get('path')}, has_tensor={audio.get('tensor') is not None}")
+
         audio_paths = [audio["path"] for audio in result.audios if audio.get("path")]
+        print(f"[OpenRouter] final audio_paths={audio_paths}")
 
         return {
             "success": True,
