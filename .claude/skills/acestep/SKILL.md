@@ -1,12 +1,151 @@
 ---
 name: acestep
 description: Use ACE-Step API to generate music, edit songs, and remix music. Supports text-to-music, lyrics generation, audio continuation, and audio repainting. Use this skill when users mention generating music, creating songs, music production, remix, or audio continuation.
-allowed-tools: Read, Write, Bash
+allowed-tools: Read, Write, Bash, Skill
 ---
 
 # ACE-Step Music Generation Skill
 
 Use ACE-Step V1.5 API for music generation. Script: `scripts/acestep.sh` (requires curl + jq).
+
+## Prerequisites - ACE-Step API Service
+
+**IMPORTANT**: This skill requires the ACE-Step API server to be running.
+
+### Required Dependencies
+
+The `scripts/acestep.sh` script requires the following tools:
+
+**1. curl** - For making HTTP requests to the API
+**2. jq** - For parsing JSON responses
+
+#### Check Dependencies
+
+Before using this skill, verify that the required tools are installed:
+
+```bash
+# Check curl
+curl --version
+
+# Check jq
+jq --version
+```
+
+#### Installing jq
+
+If jq is not installed, the script will attempt to install it automatically. If automatic installation fails, install manually:
+
+**Windows:**
+```bash
+# Using Chocolatey
+choco install jq
+
+# Or download from: https://jqlang.github.io/jq/download/
+# Extract jq.exe and add to PATH
+```
+
+**macOS:**
+```bash
+# Using Homebrew
+brew install jq
+
+# Using MacPorts
+port install jq
+```
+
+**Linux:**
+```bash
+# Debian/Ubuntu
+sudo apt-get install jq
+
+# Fedora/RHEL/CentOS
+sudo yum install jq
+# or
+sudo dnf install jq
+
+# Arch Linux
+sudo pacman -S jq
+```
+
+**Verification:**
+```bash
+jq --version
+# Should output: jq-1.x
+```
+
+If user reports jq installation issues, guide them through manual installation for their platform.
+
+### Before First Use
+
+**Ask the user about their setup:**
+
+1. **"Do you have ACE-Step API service configured and running?"**
+
+   If **YES**:
+   - Verify the API endpoint: `curl -s http://127.0.0.1:8001/health`
+   - If using remote service, ask for the API URL and update `scripts/config.json`
+   - Proceed with music generation
+
+   If **NO** or **NOT SURE**:
+   - Ask: "Do you have ACE-Step installed?"
+
+     **If installed but not running**:
+     - Use the acestep-docs skill to help them start the service
+     - Guide them through startup process
+
+     **If not installed**:
+     - Offer to help download and install ACE-Step
+     - Ask: "Would you like to use the Windows portable package or install from source?"
+     - Use acestep-docs skill to guide through installation
+
+### Service Configuration
+
+**Local Service (Default):**
+```json
+{
+  "api_url": "http://127.0.0.1:8001",
+  "api_key": ""
+}
+```
+
+**Remote Service:**
+```json
+{
+  "api_url": "http://your-server-ip:8001",
+  "api_key": "your-api-key-if-needed"
+}
+```
+
+To configure remote service, update `scripts/config.json` or use:
+```bash
+cd {skill_directory}/scripts/
+./acestep.sh config --set api_url "http://remote-server:8001"
+./acestep.sh config --set api_key "your-key"
+```
+
+### Using acestep-docs Skill for Setup Help
+
+**IMPORTANT**: For installation and startup, always use the acestep-docs skill to get complete and accurate guidance.
+
+When user needs help with installation or startup, invoke the acestep-docs skill:
+
+```
+Use the Skill tool to invoke: acestep-docs
+```
+
+**DO NOT provide simplified startup commands** - each user's environment may be different. Always guide them to use acestep-docs for proper setup.
+
+### Health Check
+
+**To verify if service is running:**
+```bash
+curl http://127.0.0.1:8001/health
+# Should return: {"status":"ok",...}
+```
+
+If health check fails, use acestep-docs skill to help user start the service properly.
+
+---
 
 **WORKFLOW**: For user requests requiring vocals, you should:
 1. Consult [Music Creation Guide](./music-creation-guide.md) for lyrics writing, caption creation, duration/BPM/key selection
