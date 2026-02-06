@@ -164,6 +164,23 @@ These features exist in the Python backend but aren't fully exposed in the web U
 - Schema: `pipeline.py` + `types/index.ts` with `src_audio_id`, `src_stage`, `audio_cover_strength`, `repainting_start/end`, `track_name`, `complete_track_classes`
 - Help text: All new tooltips in `help-text.ts`
 
+### Recent Session — GitHub & Infrastructure (Feb 2026)
+- **GitHub setup:** Fork at `matlowai/sonaturgy`, private backup at `matlowai/web-audio`
+- **Rebased** onto 35 new upstream commits (clean, zero conflicts)
+- **README:** Added Sonaturgy header with beginner-friendly Quick Start
+- **Critical fix:** `web/frontend/src/lib/` was gitignored by Python's `lib/` pattern — app was unrunnable for new clones
+- **Model checker fix:** `check_model_exists()` now verifies weight files exist, not just directory presence (partial downloads were falsely passing)
+- **Download progress bar:** Backend reports dir size vs HF repo total, frontend shows percentage bar
+- **Dep upgrade:** Next.js 16, React 19, WaveSurfer 7.12, Zustand 5 — 0 npm vulnerabilities
+- **Flash attention logging:** Now warns when flash_attn requested but package not installed (was silently falling back to SDPA)
+- **`prefer_source`:** Wired through `swap_dit_model` to match upstream's download source routing
+
+### Community Tips — CFG Guidance Settings
+From user testing: SFT model (32-50 steps) benefits from **guidance_scale 3-5** (down from default 7) with **CFG interval 0.15–0.85**. This means ~30% of steps run unguided (first 15% + last 15%), adding diversity and less "dry" output. The LM already provides strong structural guidance, so lower CFG lets the diffusion add more texture and improvisation.
+
+### Flash Attention Status
+The UI toggle works correctly end-to-end, but `flash_attn` package must be installed separately (`pip install flash-attn`). Without it, the handler silently falls back to SDPA. Now logs a warning when this happens. The `swap_dit_model` path correctly preserves the attention implementation from initial config.
+
 ### Future Ideas
 - [x] **DAW-style audio source viewer** ✅ — `AudioSourceViewer.tsx`: WaveSurfer.js waveform with scroll-wheel zoom, transport controls (⏮⏪◀▶⏸), progress bar, time display. Repaint: draggable red region overlay for visual mask selection. Phase C (minimap, beat grid, snap) still TODO
 - [ ] Batch generation queue with progress
@@ -172,3 +189,5 @@ These features exist in the Python backend but aren't fully exposed in the web U
 - [ ] Genre-based prompt suggestions (LLM-powered)
 - [ ] Training data curation from library
 - [ ] Multi-language UI (infra exists, only English populated)
+- [ ] Block-based workflow system with wrapper for custom nodes and smart/easy bindings
+- [ ] Additional model backend integrations

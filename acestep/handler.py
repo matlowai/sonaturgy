@@ -390,9 +390,13 @@ class AceStepHandler:
             acestep_v15_checkpoint_path = os.path.join(checkpoint_dir, config_path)
             if os.path.exists(acestep_v15_checkpoint_path):
                 # Determine attention implementation
-                if use_flash_attention and self.is_flash_attention_available():
-                    attn_implementation = "flash_attention_2"
-                    self.dtype = torch.bfloat16
+                if use_flash_attention:
+                    if self.is_flash_attention_available():
+                        attn_implementation = "flash_attention_2"
+                        self.dtype = torch.bfloat16
+                    else:
+                        attn_implementation = "sdpa"
+                        logger.warning("[initialize_service] Flash attention requested but flash_attn package not installed — falling back to SDPA. Install with: pip install flash-attn")
                 else:
                     attn_implementation = "sdpa"
 
@@ -406,16 +410,28 @@ class AceStepHandler:
                     )
                 except Exception as e:
                     logger.warning(f"[initialize_service] Failed to load model with {attn_implementation}: {e}")
-                    if attn_implementation == "sdpa":
-                        logger.info("[initialize_service] Falling back to eager attention")
-                        attn_implementation = "eager"
+                    # Fallback chain: flash_attention_2 → sdpa → eager
+                    fallback = "sdpa" if attn_implementation == "flash_attention_2" else "eager"
+                    logger.info(f"[initialize_service] Falling back to {fallback} attention")
+                    attn_implementation = fallback
+                    try:
                         self.model = AutoModel.from_pretrained(
-                            acestep_v15_checkpoint_path, 
-                            trust_remote_code=True, 
-                            attn_implementation=attn_implementation
+                            acestep_v15_checkpoint_path,
+                            trust_remote_code=True,
+                            attn_implementation=attn_implementation,
+                            dtype="bfloat16"
                         )
-                    else:
-                        raise e
+                    except Exception as e2:
+                        if attn_implementation == "sdpa":
+                            logger.warning(f"[initialize_service] SDPA also failed: {e2}, falling back to eager")
+                            attn_implementation = "eager"
+                            self.model = AutoModel.from_pretrained(
+                                acestep_v15_checkpoint_path,
+                                trust_remote_code=True,
+                                attn_implementation=attn_implementation
+                            )
+                        else:
+                            raise e2
 
                 self.model.config._attn_implementation = attn_implementation
                 self.config = self.model.config
