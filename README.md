@@ -24,13 +24,60 @@ A general-purpose AI audio workstation. The pipeline builder is the foundation �
 
 ### Quick Start
 
-```bash
-# Backend (from project root)
-.venv/bin/python web/backend/run.py    # port 8000
+> **You'll need:** A CUDA GPU (see upstream docs below for CPU/MPS), [Node.js 18+](https://nodejs.org/), and one of:
+> - [uv](https://docs.astral.sh/uv/getting-started/installation/) (recommended — installs Python for you), or
+> - Python 3.11+ already installed
 
-# Frontend (from web/frontend/)
-npm install && npm run dev             # port 3000
+**1. Clone and install**
+
+```bash
+git clone https://github.com/matlowai/sonaturgy.git
+cd sonaturgy
 ```
+
+If using **uv** (recommended):
+```bash
+uv sync
+```
+
+If using **pip** instead:
+```bash
+python3 -m venv .venv
+source .venv/bin/activate          # Linux/Mac
+# .venv\Scripts\activate           # Windows
+pip install -r requirements.txt
+```
+
+Then install the frontend:
+```bash
+cd web/frontend
+npm install
+cd ../..
+```
+
+**2. Run it — you need two terminals, both from the project root**
+
+Terminal 1 — Backend:
+```bash
+# If using uv:
+uv run python web/backend/run.py
+
+# If using pip/venv:
+source .venv/bin/activate && python web/backend/run.py
+```
+You should see: `Uvicorn running on http://0.0.0.0:8000`
+
+Terminal 2 — Frontend:
+```bash
+# If using uv (so node can find the right paths):
+cd web/frontend && npm run dev
+
+# Or without uv, same command:
+cd web/frontend && npm run dev
+```
+You should see: `Ready on http://localhost:3000`
+
+**3. Open http://localhost:3000** and go to the **Service Config** panel to initialize a model. Models download automatically on first run (~4GB for the default turbo model).
 
 ### Want to dig deeper?
 
