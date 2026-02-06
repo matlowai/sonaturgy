@@ -1,0 +1,16 @@
+# Dependencies
+node_modules/
+
+# Next.js
+.next/
+out/
+
+# Generated
+next-env.d.ts
+
+# Temp files
+web_tmp/
+
+# Environment
+.env
+.env.local

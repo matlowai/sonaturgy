@@ -30,6 +30,7 @@ import warnings
 from transformers import AutoTokenizer, AutoModel, AutoModelForCausalLM
 from transformers.generation.streamers import BaseStreamer
 from diffusers.models import AutoencoderOobleck
+from acestep.diffusion_core import generate_audio_core
 from acestep.model_downloader import (
     ensure_main_model,
     ensure_dit_model,
@@ -470,7 +471,10 @@ class AceStepHandler:
                     raise FileNotFoundError(f"Silence latent not found at {silence_latent_path}")
             else:
                 raise FileNotFoundError(f"ACE-Step V1.5 checkpoint not found at {acestep_v15_checkpoint_path}")
-            
+
+            # Store model variant for diffusion_core dispatch
+            self.model_variant = config_path
+
             # 2. Load VAE
             vae_checkpoint_path = os.path.join(checkpoint_dir, "vae")
             if os.path.exists(vae_checkpoint_path):
@@ -528,7 +532,88 @@ class AceStepHandler:
             error_msg = f"❌ Error initializing model: {str(e)}\n\nTraceback:\n{traceback.format_exc()}"
             logger.exception("[initialize_service] Error initializing model")
             return error_msg, False
-    
+
+    def swap_dit_model(self, new_model_variant: str) -> Tuple[str, bool]:
+        """
+        Swap the DiT model to a different variant without reloading VAE/text encoder.
+
+        Args:
+            new_model_variant: Model name like "acestep-v15-turbo", "acestep-v15-base", etc.
+
+        Returns:
+            Tuple of (message, success)
+        """
+        import gc
+
+        # Check if already on this model
+        current_variant = getattr(self, "model_variant", None)
+        if current_variant == new_model_variant:
+            logger.info(f"[swap_dit_model] Already using {new_model_variant}, skipping swap")
+            return f"Already using {new_model_variant}", True
+
+        logger.info(f"[swap_dit_model] Swapping from {current_variant} to {new_model_variant}")
+
+        try:
+            # Unload current model
+            if self.model is not None:
+                del self.model
+                self.model = None
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                logger.info(f"[swap_dit_model] Unloaded {current_variant}")
+
+            # Get checkpoint path
+            actual_project_root = self._get_project_root()
+            checkpoint_dir = os.path.join(actual_project_root, "checkpoints")
+            model_path = os.path.join(checkpoint_dir, new_model_variant)
+
+            # Check if model exists, auto-download if needed
+            from pathlib import Path
+            checkpoint_path = Path(checkpoint_dir)
+            if not check_model_exists(new_model_variant, checkpoint_path):
+                logger.info(f"[swap_dit_model] Model {new_model_variant} not found, downloading...")
+                success, msg = ensure_dit_model(new_model_variant, checkpoint_path)
+                if not success:
+                    return f"❌ Failed to download {new_model_variant}: {msg}", False
+
+            if not os.path.exists(model_path):
+                return f"❌ Model not found at {model_path}", False
+
+            # Determine attention implementation (reuse settings from init)
+            attn_implementation = getattr(self.config, "_attn_implementation", "sdpa")
+
+            # Load the new model
+            logger.info(f"[swap_dit_model] Loading {new_model_variant} with attention={attn_implementation}")
+            self.model = AutoModel.from_pretrained(
+                model_path,
+                trust_remote_code=True,
+                attn_implementation=attn_implementation,
+                dtype="bfloat16"
+            )
+
+            self.model.config._attn_implementation = attn_implementation
+            self.config = self.model.config
+
+            # Move to device
+            if not self.offload_to_cpu and not self.offload_dit_to_cpu:
+                self.model = self.model.to(self.device).to(self.dtype)
+            elif self.offload_dit_to_cpu:
+                self.model = self.model.to("cpu").to(self.dtype)
+            else:
+                self.model = self.model.to(self.device).to(self.dtype)
+
+            self.model.eval()
+            self.model_variant = new_model_variant
+
+            logger.info(f"[swap_dit_model] Successfully swapped to {new_model_variant}")
+            return f"✅ Swapped to {new_model_variant}", True
+
+        except Exception as e:
+            error_msg = f"❌ Error swapping model: {str(e)}"
+            logger.exception("[swap_dit_model] Error swapping model")
+            return error_msg, False
+
     def _is_on_target_device(self, tensor, target_device):
         """Check if tensor is on the target device (handles cuda vs cuda:0 comparison)."""
         if tensor is None:
@@ -1646,6 +1731,19 @@ class AceStepHandler:
         with torch.no_grad():
             target_latents_list = []
             latent_lengths = []
+
+            # Create silence tensor if target_wavs not provided
+            if target_wavs is None:
+                # Use metas to determine duration, default to 30s
+                default_duration = 30
+                if metas and len(metas) > 0:
+                    first_meta = metas[0] if isinstance(metas[0], dict) else {}
+                    if isinstance(first_meta, dict):
+                        default_duration = first_meta.get("duration", 30)
+                target_frames = int(default_duration * self.sample_rate)
+                target_wavs = torch.zeros(batch_size, 2, target_frames, device=self.device, dtype=torch.float32)
+                logger.info(f"[_prepare_batch] Created silence target_wavs with duration={default_duration}s, frames={target_frames}")
+
             # Use per-item wavs (may be adjusted if audio_code_hints are provided)
             target_wavs_list = [target_wavs[i].clone() for i in range(batch_size)]
             if target_wavs.device != self.device:
@@ -2162,12 +2260,15 @@ class AceStepHandler:
         shift: float = 1.0,
         audio_code_hints: Optional[Union[str, List[str]]] = None,
         infer_method: str = "ode",
+        scheduler: Optional[str] = None,  # Override timestep_mode: "linear", "discrete", "continuous"
         timesteps: Optional[List[float]] = None,
+        init_latents: Optional[torch.Tensor] = None,
+        t_start: float = 1.0,
     ) -> Dict[str, Any]:
 
         """
         Generate music from text inputs.
-        
+
         Args:
             captions: Text caption(s) describing the music (optional, can be empty strings)
             lyrics: Lyric text(s) (optional, can be empty strings)
@@ -2187,7 +2288,9 @@ class AceStepHandler:
             use_adg: Whether to use ADG (Adaptive Diffusion Guidance) (default: False)
             cfg_interval_start: Start of CFG interval (0.0-1.0, default: 0.0)
             cfg_interval_end: End of CFG interval (0.0-1.0, default: 1.0)
-            
+            init_latents: Pre-computed latent tensor for Pipeline Builder (partial denoising)
+            t_start: Starting timestep for Pipeline Builder (0.0-1.0, default: 1.0 = full denoise)
+
         Returns:
             Dictionary containing:
             - pred_wavs: Generated audio tensors
@@ -2200,14 +2303,6 @@ class AceStepHandler:
             - time_costs: Timing information
             - seed_num: Seed used
         """
-        if self.config.is_turbo:
-            # Limit inference steps to maximum 8
-            if infer_steps > 8:
-                logger.warning(f"[service_generate] dmd_gan version: infer_steps {infer_steps} exceeds maximum 8, clamping to 8")
-                infer_steps = 8
-            # CFG parameters are not adjustable for dmd_gan (they will be ignored)
-            # Note: guidance_scale, cfg_interval_start, cfg_interval_end are still passed but may be ignored by the model
-        
         # Convert single inputs to lists
         if isinstance(captions, str):
             captions = [captions]
@@ -2332,6 +2427,9 @@ class AceStepHandler:
         # Add custom timesteps if provided (convert to tensor)
         if timesteps is not None:
             generate_kwargs["timesteps"] = torch.tensor(timesteps, dtype=torch.float32)
+        # Add scheduler override if provided
+        if scheduler is not None:
+            generate_kwargs["scheduler_override"] = scheduler
         logger.info("[service_generate] Generating audio...")
         with self._load_model_context("model"):
             # Prepare condition tensors first (for LRC timestamp generation)
@@ -2351,8 +2449,19 @@ class AceStepHandler:
                 precomputed_lm_hints_25Hz=precomputed_lm_hints_25Hz,
             )
             
-            outputs = self.model.generate_audio(**generate_kwargs)
-        
+            logger.info(f"[service_generate] Calling generate_audio_core with variant={self.model_variant}")
+            logger.info(f"[service_generate] init_latents={init_latents}, t_start={t_start}")
+            outputs = generate_audio_core(
+                self.model, variant=self.model_variant,
+                init_latents=init_latents, t_start=t_start,
+                **generate_kwargs,
+            )
+            logger.info(f"[service_generate] generate_audio_core returned type={type(outputs)}")
+            if outputs is None:
+                logger.error("[service_generate] generate_audio_core returned None!")
+            elif isinstance(outputs, dict):
+                logger.info(f"[service_generate] outputs keys={list(outputs.keys())}")
+
         # Add intermediate information to outputs for extra_outputs
         outputs["src_latents"] = src_latents
         outputs["target_latents_input"] = target_latents  # Input target latents (before generation)
@@ -2737,6 +2846,8 @@ class AceStepHandler:
         infer_method: str = "ode",
         use_tiled_decode: bool = True,
         timesteps: Optional[List[float]] = None,
+        init_latents: Optional[torch.Tensor] = None,
+        t_start: float = 1.0,
         progress=None
     ) -> Dict[str, Any]:
         """
@@ -2888,6 +2999,8 @@ class AceStepHandler:
                 audio_code_hints=audio_code_hints_batch,  # Pass audio code hints as list
                 return_intermediate=should_return_intermediate,
                 timesteps=timesteps,  # Pass custom timesteps if provided
+                init_latents=init_latents,
+                t_start=t_start,
             )
             
             logger.info("[generate_music] Model generation completed. Decoding latents...")

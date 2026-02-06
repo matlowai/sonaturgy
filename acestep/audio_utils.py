@@ -40,17 +40,19 @@ class AudioSaver:
         sample_rate: int = 48000,
         format: Optional[str] = None,
         channels_first: bool = True,
+        metadata: Optional[dict] = None,
     ) -> str:
         """
         Save audio data to file
-        
+
         Args:
             audio_data: Audio data, torch.Tensor [channels, samples] or numpy.ndarray
             output_path: Output file path (extension can be omitted)
             sample_rate: Sample rate
             format: Audio format ('flac', 'wav', 'mp3'), defaults to default_format
             channels_first: If True, tensor format is [channels, samples], else [samples, channels]
-        
+            metadata: Optional dict of generation params to embed in the file
+
         Returns:
             Actual saved file path
         """
@@ -115,19 +117,94 @@ class AudioSaver:
                 )
             
             logger.debug(f"[AudioSaver] Saved audio to {output_path} ({format}, {sample_rate}Hz)")
+
+            # Embed metadata if provided
+            if metadata and format in ["flac", "wav"]:
+                self._embed_metadata(str(output_path), metadata)
+
             return str(output_path)
-            
+
         except Exception as e:
             try:
                 import soundfile as sf
                 audio_np = audio_tensor.transpose(0, 1).numpy()  # -> [samples, channels]
                 sf.write(str(output_path), audio_np, sample_rate, format=format.upper())
                 logger.debug(f"[AudioSaver] Fallback soundfile Saved audio to {output_path} ({format}, {sample_rate}Hz)")
+
+                # Embed metadata if provided
+                if metadata and format in ["flac", "wav"]:
+                    self._embed_metadata(str(output_path), metadata)
+
                 return str(output_path)
-            except Exception as e:
-                logger.error(f"[AudioSaver] Failed to save audio: {e}")
+            except Exception as e2:
+                logger.error(f"[AudioSaver] Failed to save audio: {e2}")
                 raise
-    
+
+    def _embed_metadata(self, filepath: str, metadata: dict) -> bool:
+        """Embed generation metadata into audio file.
+
+        Args:
+            filepath: Path to the audio file
+            metadata: Dictionary of generation parameters
+
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            ext = Path(filepath).suffix.lower()
+
+            if ext == ".flac":
+                from mutagen.flac import FLAC
+                audio = FLAC(filepath)
+                audio["ACESTEP_JSON"] = json.dumps(metadata)
+                if "caption" in metadata:
+                    audio["DESCRIPTION"] = metadata["caption"]
+                if "lyrics" in metadata:
+                    audio["LYRICS"] = metadata["lyrics"]
+                if "bpm" in metadata:
+                    audio["BPM"] = str(metadata["bpm"])
+                if "keyscale" in metadata:
+                    audio["KEY"] = metadata["keyscale"]
+                audio["SOFTWARE"] = "ACE-Step 1.5"
+                audio.save()
+                logger.debug(f"[AudioSaver] Embedded metadata in {filepath}")
+                return True
+
+            elif ext == ".wav":
+                from mutagen.wave import WAVE
+                from mutagen.id3 import TXXX
+                audio = WAVE(filepath)
+                if audio.tags is None:
+                    audio.add_tags()
+                audio.tags.add(TXXX(encoding=3, desc="ACESTEP_JSON", text=json.dumps(metadata)))
+                audio.save()
+                logger.debug(f"[AudioSaver] Embedded metadata in {filepath}")
+                return True
+
+            elif ext == ".mp3":
+                from mutagen.mp3 import MP3
+                from mutagen.id3 import ID3, TXXX, TIT2, COMM, TBPM
+                audio = MP3(filepath)
+                if audio.tags is None:
+                    audio.add_tags()
+                # Store full JSON
+                audio.tags.add(TXXX(encoding=3, desc="ACESTEP_JSON", text=json.dumps(metadata)))
+                # Human-readable tags
+                if "caption" in metadata:
+                    audio.tags.add(TIT2(encoding=3, text=metadata["caption"][:100]))
+                    audio.tags.add(COMM(encoding=3, lang='eng', desc='', text=metadata["caption"]))
+                if "bpm" in metadata and metadata["bpm"]:
+                    audio.tags.add(TBPM(encoding=3, text=str(metadata["bpm"])))
+                audio.save()
+                logger.debug(f"[AudioSaver] Embedded metadata in {filepath}")
+                return True
+
+            return False
+
+        except Exception as e:
+            logger.warning(f"[AudioSaver] Failed to embed metadata: {e}")
+            return False
+
     def convert_audio(
         self,
         input_path: Union[str, Path],

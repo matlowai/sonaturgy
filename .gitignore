@@ -1,6 +1,19 @@
 data/
 *.mp3
 *.wav
+*.flac
+
+# Model weights (large binary files)
+models/
+
+# Generated audio temp files
+web_tmp/
+
+# Node modules
+node_modules/
+
+# Next.js build cache
+.next/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

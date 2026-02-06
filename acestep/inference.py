@@ -118,6 +118,10 @@ class GenerationParams:
     # If provided, overrides inference_steps and shift
     timesteps: Optional[List[float]] = None
 
+    # Pipeline Builder: start from a pre-computed latent at a given timestep
+    init_latents: Optional[Any] = None  # torch.Tensor, kept as Any to avoid import
+    t_start: float = 1.0  # 1.0 = full denoise from noise, <1.0 = partial denoise
+
     repainting_start: float = 0.0
     repainting_end: float = -1
     audio_cover_strength: float = 1.0
@@ -581,6 +585,8 @@ def generate_music(
             shift=params.shift,
             infer_method=params.infer_method,
             timesteps=params.timesteps,
+            init_latents=params.init_latents,
+            t_start=params.t_start,
             progress=progress,
         )
 
@@ -646,11 +652,33 @@ def generate_music(
             if audio_tensor is not None and save_dir is not None:
                 try:
                     audio_file = os.path.join(save_dir, f"{audio_key}.{audio_format}")
+
+                    # Build metadata for embedding
+                    audio_metadata = {
+                        "generator": "ACE-Step 1.5",
+                        "caption": params.caption,
+                        "lyrics": params.lyrics,
+                        "instrumental": params.instrumental,
+                        "task_type": params.task_type,
+                        "vocal_language": params.vocal_language,
+                        "bpm": params.bpm,
+                        "keyscale": params.keyscale,
+                        "timesignature": params.timesignature,
+                        "duration": params.duration,
+                        "seed": audio_params.get("seed"),
+                        "inference_steps": params.inference_steps,
+                        "guidance_scale": params.guidance_scale,
+                        "shift": params.shift,
+                        "infer_method": params.infer_method,
+                        "audio_codes": audio_params.get("audio_codes", ""),
+                    }
+
                     audio_path = audio_saver.save_audio(audio_tensor,
                                                         audio_file,
                                                         sample_rate=sample_rate,
                                                         format=audio_format,
-                                                        channels_first=True)
+                                                        channels_first=True,
+                                                        metadata=audio_metadata)
                 except Exception as e:
                     logger.error(f"[generate_music] Failed to save audio file: {e}")
                     audio_path = ""  # Fallback to empty path
