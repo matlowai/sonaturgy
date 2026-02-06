@@ -1,5 +1,53 @@
+<h1 align="center">Sonaturgy</h1>
+<h3 align="center">A web UI for ACE-Step 1.5 — and eventually, much more</h3>
+
+<p align="center">
+    <em>sonaturgy</em> (n.) — the craft of shaping sound through arcane means
+</p>
+
+## What is this?
+
+This is a fork of [ACE-Step 1.5](https://github.com/ace-step/ACE-Step-1.5) that adds a full-featured **web interface** built with Next.js and FastAPI, replacing the default Gradio UI with something designed for deeper creative control.
+
+**What's here now:**
+- **Pipeline Builder** — chain multiple generation stages (generate, refine, cover, repaint, extract stems, lego tracks, complete accompaniment) into a single workflow
+- **7 stage types** with per-stage model selection and parameter control
+- **WaveSurfer.js audio visualization** with zoom, transport controls, and draggable region editing for repaint mode
+- **Real-time WebSocket progress** with Chain-of-Thought reasoning display
+- **LLM-assisted prompt writing** with sampler controls
+- **Prompt library** with tagging and search
+- **Global audio player** with batch navigation
+- **Hot model swapping** between DiT variants without reloading VAE/text encoder
+
+**Where this is going:**
+A general-purpose AI audio workstation. The pipeline builder is the foundation — future plans include support for additional model backends and a node-based workflow system accepting standardized building blocks and agentic editing without lines everywhere hopefully.
+
+### Quick Start
+
+```bash
+# Backend (from project root)
+.venv/bin/python web/backend/run.py    # port 8000
+
+# Frontend (from web/frontend/)
+npm install && npm run dev             # port 3000
+```
+
+### Want to dig deeper?
+
+| Doc | What's in it |
+|-----|-------------|
+| [`web/PLAN.md`](web/PLAN.md) | Master reference — architecture, file map, API spec, pipeline system, gotchas |
+| [`web/HANDOFF.md`](web/HANDOFF.md) | Original architecture decisions and file inventory |
+| [`plan.md`](plan.md) | Project index, feature summary, and TODO with research notes |
+
+### How this was built
+
+This project was built collaboratively with Claude (Anthropic's AI assistant) in an iterative conversation-driven workflow — what some people are calling "vibe coding" or "vibe engineering." The planning docs, architecture decisions, and code were developed together through dialogue. The `.md` files above are the actual working documents from that process, left in as-is because they might be useful to anyone exploring how AI-assisted development works in practice.
+Beware of bugs... This is Alpha.
+---
+
 <h1 align="center">ACE-Step 1.5</h1>
-<h1 align="center">Pushing the Boundaries of Open-Source Music Generation</h1>
+<h2 align="center">Pushing the Boundaries of Open-Source Music Generation</h2>
 <p align="center">
     <a href="https://ace-step.github.io/ace-step-v1.5.github.io/">Project</a> |
     <a href="https://huggingface.co/ACE-Step/Ace-Step1.5">Hugging Face</a> |

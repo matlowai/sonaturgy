@@ -286,7 +286,7 @@ Files changed: `routers/models.py`, `api.ts`, `serviceStore.ts`, `ServiceConfig.
 
 #### [x] 2. Pipeline Builder (Multi-Stage Latent Refinement) ✅ DONE (Phases 0-4)
 **Problem:** Users want ComfyUI-style multi-model workflows (e.g. Base 50-step → Turbo 8-step
-refine at denoise=0.6) but without the spaghetti node graph. Inspired by a ComfyUI workflow
+refine at denoise=0.6) but with a streamlined linear interface. Inspired by a ComfyUI workflow
 using `ace_1_5_base` (50 steps, denoise=1.0) → `acestep_v1.5_turbo` (8 steps, denoise=0.6,
 sampler=jkass_quality) with shared conditioning and shift=3 on both.
 
@@ -610,7 +610,7 @@ i18n infrastructure exists but only English. Gradio supports en/zh/ja.
 ## Pipeline Builder Design Spec
 
 > This is the full technical design for the multi-stage latent refinement pipeline.
-> Inspired by ComfyUI workflows but with a clean block-based UX instead of node spaghetti.
+> Inspired by ComfyUI workflows but with a clean block-based UX instead of a visual node graph.
 
 ### Motivation
 

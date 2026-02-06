@@ -533,12 +533,13 @@ class AceStepHandler:
             logger.exception("[initialize_service] Error initializing model")
             return error_msg, False
 
-    def swap_dit_model(self, new_model_variant: str) -> Tuple[str, bool]:
+    def swap_dit_model(self, new_model_variant: str, prefer_source: Optional[str] = None) -> Tuple[str, bool]:
         """
         Swap the DiT model to a different variant without reloading VAE/text encoder.
 
         Args:
             new_model_variant: Model name like "acestep-v15-turbo", "acestep-v15-base", etc.
+            prefer_source: Preferred download source ("huggingface", "modelscope", or None for auto-detect)
 
         Returns:
             Tuple of (message, success)
@@ -573,7 +574,7 @@ class AceStepHandler:
             checkpoint_path = Path(checkpoint_dir)
             if not check_model_exists(new_model_variant, checkpoint_path):
                 logger.info(f"[swap_dit_model] Model {new_model_variant} not found, downloading...")
-                success, msg = ensure_dit_model(new_model_variant, checkpoint_path)
+                success, msg = ensure_dit_model(new_model_variant, checkpoint_path, prefer_source=prefer_source)
                 if not success:
                     return f"❌ Failed to download {new_model_variant}: {msg}", False
 
