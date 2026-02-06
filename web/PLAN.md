@@ -282,6 +282,34 @@ with `_download_state` tracking dict, background threads. Frontend: `DownloadBut
 in `ServiceConfig.tsx`, polls `/download-status` every 5s, toast notifications, auto-refresh.
 Files changed: `routers/models.py`, `api.ts`, `serviceStore.ts`, `ServiceConfig.tsx`.
 
+**Feb 2026 updates:**
+- **Progress bar:** `/download-status` now returns `current_bytes`/`total_bytes`/`progress` for active downloads via `_get_dir_size()` + HF `repo_info(files_metadata=True)`. Frontend shows percentage bar.
+- **Model existence check fix:** `check_model_exists()` in `model_downloader.py` now uses `_has_weight_files()` to verify `.safetensors`/`.bin`/`.pt` files exist, not just directory presence. Partial downloads (metadata without weights) no longer falsely pass.
+
+---
+
+#### [ ] Flash Attention / Attention Implementation Visibility — TODO
+**Status:** The flash attention toggle works correctly end-to-end (UI → schema → handler → `AutoModel.from_pretrained`). Fallback chain: `flash_attention_2 → sdpa → eager`. Warning logged when `flash_attn` package not installed.
+
+**What needs doing:**
+- [ ] Expose `attn_implementation` in `/api/service/status` response so UI can display what's actually in use (currently only visible in server logs)
+- [ ] Show active attention impl in ServiceConfig panel (e.g. badge: "FA2" / "SDPA" / "Eager")
+- [ ] Consider adding flash_attn install status to a system info / diagnostics endpoint
+
+**Code path:** `ServiceConfig.tsx` (flashAttn toggle) → `schemas/service.py` (use_flash_attention bool) → `routers/service.py` (passthrough) → `handler.py:393-401` (availability check + fallback) → `handler.py:403-422` (load with fallback chain) → `handler.py:585` (swap_dit_model preserves impl from config)
+
+**Community note:** Users without `flash_attn` installed see SDPA silently used. The warning log (`pip install flash-attn`) now makes this visible in terminal but not in the UI yet.
+
+---
+
+#### [ ] CFG Guidance Tuning Notes — TODO
+**Community finding:** SFT model (32-50 steps) benefits from **guidance_scale 3-5** (down from default 7) with **CFG interval start=0.15, end=0.85**. This means ~30% of steps run unguided, adding diversity/texture. The LM already provides strong structural backbone, so lower CFG lets diffusion add more improvisation.
+
+**What needs doing:**
+- [ ] Consider updating default guidance_scale for SFT/base models (currently 7 for all)
+- [ ] Expose CFG interval (start/end) in AdvancedSettings if not already there
+- [ ] Add presets or per-model-type default recommendations in the UI
+
 ---
 
 #### [x] 2. Pipeline Builder (Multi-Stage Latent Refinement) ✅ DONE (Phases 0-4)
