@@ -30,6 +30,12 @@ const MAIN_MODEL_COMPONENTS = new Set([
   'acestep-5Hz-lm-1.7B',
 ]);
 
+function formatBytes(bytes: number): string {
+  if (bytes < 1e6) return `${(bytes / 1e3).toFixed(0)} KB`;
+  if (bytes < 1e9) return `${(bytes / 1e6).toFixed(0)} MB`;
+  return `${(bytes / 1e9).toFixed(1)} GB`;
+}
+
 function DownloadButton({
   modelName,
   ready,
@@ -42,11 +48,13 @@ function DownloadButton({
   const { fetchModels } = useService();
   const downloading = store.downloadingModels.has(modelName);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [progress, setProgress] = useState<{ pct: number; current: number; total: number } | null>(null);
 
   // Start polling model info when download begins
   useEffect(() => {
     if (!downloading) {
       if (pollRef.current) clearInterval(pollRef.current);
+      setProgress(null);
       return;
     }
     const isMain = MAIN_MODEL_COMPONENTS.has(modelName);
@@ -56,16 +64,22 @@ function DownloadButton({
         const resp = await api.getModelDownloadStatus();
         if (!resp.success) return;
         const dl = resp.data.downloading?.[dlKey];
+        // Update progress if available
+        if (dl && dl.status === 'downloading' && dl.total_bytes > 0) {
+          setProgress({ pct: dl.progress || 0, current: dl.current_bytes || 0, total: dl.total_bytes });
+        }
         // Check if the model became ready on disk
         const ditReady = resp.data.dit?.[modelName];
         const lmReady = resp.data.lm?.[modelName];
         const coreReady = isMain && resp.data.main_ready;
         if (ditReady || lmReady || coreReady || (dl && dl.status === 'completed')) {
           store.removeDownloading(modelName);
+          setProgress(null);
           ui.addToast(`${modelName} downloaded`, 'success');
           fetchModels();
         } else if (dl && dl.status === 'error') {
           store.removeDownloading(modelName);
+          setProgress(null);
           ui.addToast(`Download failed: ${dl.message}`, 'error');
         }
       } catch {
@@ -94,6 +108,31 @@ function DownloadButton({
 
   const isDownloading = downloading || (MAIN_MODEL_COMPONENTS.has(modelName) && store.downloadingModels.has('__main__'));
 
+  if (isDownloading) {
+    return (
+      <div className="inline-flex flex-col gap-0.5" style={{ minWidth: 140 }}>
+        <div className="flex items-center gap-1 text-[10px] font-medium" style={{ color: '#3b82f6' }}>
+          <Spinner size="sm" />
+          {progress ? `${progress.pct.toFixed(0)}% — ${formatBytes(progress.current)} / ${formatBytes(progress.total)}` : 'Starting...'}
+        </div>
+        <div style={{
+          height: 3,
+          borderRadius: 2,
+          backgroundColor: 'rgba(59,130,246,0.15)',
+          overflow: 'hidden',
+        }}>
+          <div style={{
+            height: '100%',
+            width: `${progress?.pct ?? 0}%`,
+            backgroundColor: '#3b82f6',
+            borderRadius: 2,
+            transition: 'width 0.5s ease',
+          }} />
+        </div>
+      </div>
+    );
+  }
+
   return (
     <button
       className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full font-medium cursor-pointer"
@@ -103,19 +142,11 @@ function DownloadButton({
         border: 'none',
       }}
       onClick={handleDownload}
-      disabled={isDownloading}
       title={MAIN_MODEL_COMPONENTS.has(modelName)
         ? 'Downloads core components (turbo, 1.7B LM, VAE, text encoder)'
         : `Download ${modelName}`}
     >
-      {isDownloading ? (
-        <>
-          <Spinner size="sm" />
-          Downloading...
-        </>
-      ) : (
-        'Download'
-      )}
+      Download
     </button>
   );
 }

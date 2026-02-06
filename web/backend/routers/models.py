@@ -82,6 +82,29 @@ def _get_checkpoints_dir() -> str:
     return os.path.join(app_config.PROJECT_ROOT, "checkpoints")
 
 
+def _get_dir_size(path: str) -> int:
+    """Get total size of all files in a directory (non-recursive into .cache)."""
+    total = 0
+    if not os.path.isdir(path):
+        return 0
+    for f in os.listdir(path):
+        fp = os.path.join(path, f)
+        if os.path.isfile(fp):
+            total += os.path.getsize(fp)
+    return total
+
+
+def _get_repo_size(repo_id: str) -> int:
+    """Fetch total repo size from HuggingFace. Returns 0 on failure."""
+    try:
+        from huggingface_hub import repo_info
+        info = repo_info(repo_id, files_metadata=True, timeout=10)
+        return sum(s.size for s in info.siblings if s.size)
+    except Exception as e:
+        logger.warning(f"Could not fetch repo size for {repo_id}: {e}")
+        return 0
+
+
 def _has_weights(model_dir: str) -> bool:
     """Check if a model directory actually contains weight files."""
     if not os.path.isdir(model_dir):
@@ -164,6 +187,18 @@ def download_status():
     lm = _scan_models("acestep-5Hz-lm-", LM_DESCRIPTIONS)
     ckpt = _get_checkpoints_dir()
 
+    # Enrich active downloads with progress info
+    downloading = {}
+    for name, state in _download_state.items():
+        entry = {k: v for k, v in state.items() if k != "model_dir"}
+        if state.get("status") == "downloading" and state.get("model_dir"):
+            total = state.get("total_bytes", 0)
+            current = _get_dir_size(state["model_dir"])
+            entry["current_bytes"] = current
+            entry["total_bytes"] = total
+            entry["progress"] = round(current / total * 100, 1) if total > 0 else 0
+        downloading[name] = entry
+
     return ApiResponse(data={
         "main_ready": all([
             _has_weights(os.path.join(ckpt, "vae")),
@@ -175,7 +210,7 @@ def download_status():
             "vae": _has_weights(os.path.join(ckpt, "vae")),
             "text_encoder": _has_weights(os.path.join(ckpt, "Qwen3-Embedding-0.6B")),
         },
-        "downloading": dict(_download_state),
+        "downloading": downloading,
     })
 
 
@@ -194,7 +229,17 @@ def download_model(model_name: str):
     if model_name in _download_state and _download_state[model_name]["status"] == "downloading":
         return ApiResponse(data={"status": "downloading", "message": "Already downloading"})
 
-    _download_state[model_name] = {"status": "downloading", "message": "Starting download..."}
+    # Fetch expected size before starting download thread
+    from acestep.model_downloader import SUBMODEL_REGISTRY as _reg
+    total_bytes = _get_repo_size(_reg[model_name])
+    model_dir = os.path.join(_get_checkpoints_dir(), model_name)
+
+    _download_state[model_name] = {
+        "status": "downloading",
+        "message": "Starting download...",
+        "total_bytes": total_bytes,
+        "model_dir": model_dir,
+    }
 
     def _do_download():
         try:
@@ -221,7 +266,15 @@ def download_main():
     if key in _download_state and _download_state[key]["status"] == "downloading":
         return ApiResponse(data={"status": "downloading", "message": "Already downloading"})
 
-    _download_state[key] = {"status": "downloading", "message": "Starting main model download..."}
+    from acestep.model_downloader import MAIN_MODEL_REPO
+    total_bytes = _get_repo_size(MAIN_MODEL_REPO)
+
+    _download_state[key] = {
+        "status": "downloading",
+        "message": "Starting main model download...",
+        "total_bytes": total_bytes,
+        "model_dir": _get_checkpoints_dir(),  # main downloads to root checkpoints dir
+    }
 
     def _do_download():
         try:

@@ -206,36 +206,57 @@ def get_checkpoints_dir(custom_dir: Optional[str] = None) -> Path:
 def check_main_model_exists(checkpoints_dir: Optional[Path] = None) -> bool:
     """
     Check if the main model components exist in the checkpoints directory.
-    
+
+    Verifies each component directory contains actual weight files,
+    not just metadata from an interrupted download.
+
     Returns:
-        True if all main model components exist, False otherwise.
+        True if all main model components exist with weight files, False otherwise.
     """
     if checkpoints_dir is None:
         checkpoints_dir = get_checkpoints_dir()
-    
+
     for component in MAIN_MODEL_COMPONENTS:
         component_path = checkpoints_dir / component
-        if not component_path.exists():
+        if not _has_weight_files(component_path):
             return False
     return True
+
+
+def _has_weight_files(model_path: Path) -> bool:
+    """
+    Check if a model directory contains actual weight files.
+
+    A directory may exist with metadata (config, tokenizer) but lack
+    the actual weight files due to an interrupted download.
+    """
+    if not model_path.is_dir():
+        return False
+    for f in model_path.iterdir():
+        if f.suffix in (".safetensors", ".bin", ".pt"):
+            return True
+    return False
 
 
 def check_model_exists(model_name: str, checkpoints_dir: Optional[Path] = None) -> bool:
     """
     Check if a specific model exists in the checkpoints directory.
-    
+
+    Verifies the directory exists AND contains actual weight files,
+    not just metadata from an interrupted download.
+
     Args:
         model_name: Name of the model to check
         checkpoints_dir: Custom checkpoints directory (optional)
-    
+
     Returns:
-        True if the model exists, False otherwise.
+        True if the model exists with weight files, False otherwise.
     """
     if checkpoints_dir is None:
         checkpoints_dir = get_checkpoints_dir()
-    
+
     model_path = checkpoints_dir / model_name
-    return model_path.exists()
+    return _has_weight_files(model_path)
 
 
 def list_available_models() -> Dict[str, str]:
@@ -325,7 +346,7 @@ def download_submodel(
 
     model_path = checkpoints_dir / model_name
 
-    if not force and model_path.exists():
+    if not force and _has_weight_files(model_path):
         return True, f"Model '{model_name}' already exists at {model_path}"
 
     repo_id = SUBMODEL_REGISTRY[model_name]
