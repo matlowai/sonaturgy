@@ -15,6 +15,8 @@ from web.backend.schemas.generation import (
     FormatResponse,
     UnderstandRequest,
     UnderstandResponse,
+    AnalyzeRequest,
+    AnalyzeResponse,
 )
 from web.backend.schemas.pipeline import PipelineRequest
 from web.backend.services.task_manager import task_manager, TaskStatus
@@ -290,6 +292,82 @@ def understand_endpoint(
         language=result.language,
         timesignature=result.timesignature,
         status_message=result.status_message,
+    ))
+
+
+@router.post("/analyze")
+def analyze_endpoint(
+    req: AnalyzeRequest,
+    llm=Depends(get_llm_handler),
+):
+    """Run LLM Phase 1 only (analysis/preview). Returns metadata in ~1-2 seconds."""
+    if llm.model is None:
+        raise HTTPException(400, "LLM service not initialized")
+
+    top_k = None if req.lm_top_k == 0 else req.lm_top_k
+    top_p = None if req.lm_top_p >= 1.0 else req.lm_top_p
+
+    # Build user_metadata from provided fields
+    user_metadata = {}
+    if req.bpm is not None:
+        user_metadata["bpm"] = str(req.bpm)
+    if req.duration > 0:
+        user_metadata["duration"] = str(int(req.duration))
+    if req.keyscale:
+        user_metadata["keyscale"] = req.keyscale
+    if req.timesignature:
+        user_metadata["timesignature"] = req.timesignature
+    if req.vocal_language and req.vocal_language != "unknown":
+        user_metadata["language"] = req.vocal_language
+
+    result = llm.generate_with_stop_condition(
+        caption=req.caption,
+        lyrics=req.lyrics,
+        infer_type="dit",  # Phase 1 only
+        temperature=req.lm_temperature,
+        cfg_scale=req.lm_cfg_scale,
+        negative_prompt=req.lm_negative_prompt,
+        top_k=top_k,
+        top_p=top_p,
+        use_constrained_decoding=req.use_constrained_decoding,
+        user_metadata=user_metadata or None,
+        use_cot_metas=req.use_cot_metas,
+        use_cot_caption=req.use_cot_caption,
+        use_cot_language=req.use_cot_language,
+    )
+
+    if not result.get("success"):
+        return ApiResponse(success=False, error=result.get("error", "Analysis failed"))
+
+    meta = result.get("metadata", {})
+    extra = result.get("extra_outputs", {})
+    time_costs = extra.get("time_costs", {})
+
+    # Parse BPM as int if present
+    bpm = meta.get("bpm")
+    if bpm is not None:
+        try:
+            bpm = int(bpm)
+        except (ValueError, TypeError):
+            bpm = None
+
+    # Parse duration as float if present
+    duration = meta.get("duration")
+    if duration is not None:
+        try:
+            duration = float(duration)
+        except (ValueError, TypeError):
+            duration = None
+
+    return ApiResponse(data=AnalyzeResponse(
+        caption=meta.get("caption", ""),
+        bpm=bpm,
+        keyscale=meta.get("keyscale", ""),
+        duration=duration,
+        language=meta.get("language", ""),
+        timesignature=meta.get("timesignature", ""),
+        thinking_text=extra.get("thinking_text", ""),
+        phase1_time=time_costs.get("phase1_time", 0.0),
     ))
 
 

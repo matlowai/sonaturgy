@@ -10,21 +10,19 @@
 ## Last Session Summary (2026-02-06)
 
 **Completed this session:**
-1. **Project Presets** — Auto-save last used service config (9 fields) + generation settings
-   (29 fields) to localStorage. Named presets: 4 built-in (Fast Draft, Quality, SFT+CFG,
-   Cover Session) + user save/load/delete. Preset selector UI at top of sidebar.
-   New file: `web/frontend/src/lib/presets.ts`. Modified: `ServiceConfig.tsx`, `generationStore.ts`.
-2. **inference_mode benchmark** — Tested `torch.inference_mode()` vs `torch.no_grad()` on GPU.
-   No measurable speed difference. Reverted `diffusion_core.py` to `no_grad` for training
-   compatibility. Pipeline executor keeps `inference_mode` (VAE decode only).
-3. **Hydration fix** — Fixed nested `<button>` in StageBlock.tsx caption toggle (Tooltip
-   renders inner `<button>`). Changed to `<div role="button">` with keyboard handler.
-4. **GPU testing** — Cover and repaint work end-to-end. Both need enhancement.
-   Extract/lego/complete still untested.
+1. **LLM Preview (Analysis-Only)** — New `POST /analyze` endpoint runs Phase 1 only
+   (`generate_with_stop_condition(infer_type="dit")`) — returns metadata (BPM, key, duration,
+   language, rewritten caption, raw CoT thinking) in ~1-2 seconds. "Preview LLM" button in
+   CustomMode with collapsible result panel, Apply button, expandable raw CoT output.
+   Modified: `llm_inference.py` (expose `thinking_text`), `schemas/generation.py`,
+   `routers/generation.py`, `api.ts`, `types/index.ts`, `CustomMode.tsx`, `i18n/en.json`, `help-text.ts`.
+2. **Dynamic Slider Labels** — Cover strength slider now shows for text2music + reference audio
+   as "Similarity / Denoise" (was only visible for cover tasks). Label changes based on context.
 
 **Previous session:**
-1. Per-Stage Caption/Lyrics Override, Cover Safety Fallback, Device-Agnostic Cache Cleanup
-2. PIPELINE_FRAMEWORK.md (8 parts), Community Fork Analysis
+1. Project Presets (auto-save + named presets), inference_mode benchmark, hydration fix, GPU testing
+2. Per-Stage Caption/Lyrics Override, Cover Safety Fallback, Device-Agnostic Cache Cleanup
+3. PIPELINE_FRAMEWORK.md (8 parts), Community Fork Analysis
 
 **Earlier sessions:**
 - Pipeline Expansion (7 Stage Types), AudioSourceViewer, Pipeline Builder Phases 0-4, LLM Assist,
@@ -39,11 +37,13 @@
 
 **Next up (P0 remaining):** Item 4 in TODO below (GPU-aware limits)
 **Next up (P1):** Items 5-10 (Restore params, Send to Src, LM codes, Understand music, Auto toggles, Score/Codes sliders)
+**GPU test needed:** LLM Preview endpoint (analyze), per-stage caption/lyrics, extract/lego/complete
 
 **Files modified in `acestep/` (core Python — NOT just web/):**
 - `acestep/diffusion_core.py` — NEW (579 lines), uses `torch.no_grad()` (benchmarked `inference_mode` — no speed gain, kept `no_grad` for training compatibility)
 - `acestep/handler.py` — MODIFIED (+26 lines: import, model_variant, generate_audio_core call, init_latents/t_start)
 - `acestep/inference.py` — MODIFIED (+6 lines: init_latents/t_start in GenerationParams)
+- `acestep/llm_inference.py` — MODIFIED (+5 lines: initialized `cot_output_text`, exposed `thinking_text` in `extra_outputs` for `dit` mode return)
 
 ---
 
@@ -52,7 +52,7 @@
 ```
 Browser (port 3000)          Backend (port 8000)           ACE-Step Core
 ┌─────────────────┐   HTTP   ┌──────────────────┐         ┌──────────────┐
-│  Next.js 14     │ ──────→  │  FastAPI          │ ──────→ │ handler.py   │
+│  Next.js 16     │ ──────→  │  FastAPI          │ ──────→ │ handler.py   │
 │  React + Zustand│   /api/* │  Routers + Schemas│         │ inference.py │
 │  Tailwind CSS   │          │  TaskManager      │         │ llm_inference│
 └────────┬────────┘          └────────┬─────────┘         │ gpu_config   │
@@ -107,7 +107,7 @@ rm -rf .next && npm run dev
 | **Routers** | | |
 | `routers/service.py` | 116 | `/initialize`, `/initialize-llm`, `/status`, `/gpu-config` |
 | `routers/models.py` | ~240 | `/dit`, `/lm`, `/info`, `/download-status`, `/download/{name}`, `/download-main`, `/checkpoints` |
-| `routers/generation.py` | ~370 | `/generate`, `/task/{id}`, `/create-sample`, `/format`, `/understand`, **`/pipeline`** (validates 7 stage types, audio source, model constraints) |
+| `routers/generation.py` | ~450 | `/generate`, `/task/{id}`, `/create-sample`, `/format`, `/understand`, **`/analyze`** (LLM Phase 1 preview), **`/pipeline`** (validates 7 stage types, audio source, model constraints) |
 | `routers/audio.py` | 156 | `/upload`, `/files/{id}`, `/convert-to-codes`, `/score`, `/lrc`, `/download-all` |
 | `routers/training.py` | 207 | `/dataset/*`, `/start`, `/stop`, `/status`, `/preprocess`, `/export` |
 | `routers/lora.py` | 44 | `/load`, `/unload`, `/enable`, `/scale`, `/status` |
@@ -116,7 +116,7 @@ rm -rf .next && npm run dev
 | **Schemas** | | |
 | `schemas/common.py` | 15 | `ApiResponse` wrapper |
 | `schemas/service.py` | 39 | `InitializeRequest`, `ServiceStatus`, `GPUConfigResponse` |
-| `schemas/generation.py` | 145 | `GenerateRequest`, `TaskStatusResponse`, `CreateSampleRequest/Response`, etc. |
+| `schemas/generation.py` | ~185 | `GenerateRequest`, `TaskStatusResponse`, `CreateSampleRequest/Response`, `AnalyzeRequest/Response`, etc. |
 | `schemas/audio.py` | 47 | `ScoreRequest/Response`, `LRCRequest/Response` |
 | `schemas/training.py` | 73 | `ScanDatasetRequest`, `TrainingRequest`, `ExportLoRARequest`, etc. |
 | `schemas/pipeline.py` | 83 | **NEW.** `PipelineStageConfig` (7 stage types, audio source fields, cover/repaint/track params), `PipelineRequest` |
@@ -144,7 +144,7 @@ rm -rf .next && npm run dev
 | **Components — Generation** | | |
 | `components/generation/GenerationPanel.tsx` | ~87 | Mode tabs (Simple/Custom/Pipeline) + generate button + AutoGen |
 | `components/generation/SimpleMode.tsx` | 173 | LLM-assisted: query → editable caption/lyrics |
-| `components/generation/CustomMode.tsx` | ~375 | Full manual control: all params, task types + LLMAssist |
+| `components/generation/CustomMode.tsx` | ~560 | Full manual control: all params, task types, LLMAssist, **LLM Preview** (analyze-only button + result panel with Apply), **dynamic slider labels** (cover strength vs similarity/denoise) |
 | `components/generation/PipelineMode.tsx` | ~210 | **NEW.** Pipeline builder: LLMAssist, conditioning, stage list, presets (built-in + user save/load/delete), Run Pipeline |
 | `components/generation/StageBlock.tsx` | ~469 | **NEW.** Per-stage card: 7-option type selector, conditional UI per type (audio source toggle, cover strength, repaint range, track selector, complete multi-select), model filtering for base-only types |
 | `components/generation/AdvancedSettings.tsx` | 249 | DiT + LM hyperparameters |
@@ -165,9 +165,9 @@ rm -rf .next && npm run dev
 | `hooks/useWebSocket.ts` | 37 | WS connection + subscribe |
 | `hooks/useBatchNavigation.ts` | 61 | prev/next batch |
 | **Lib** | | |
-| `lib/api.ts` | ~190 | All API calls incl. downloadModel/downloadMainModel + `runPipeline()` |
+| `lib/api.ts` | ~300 | All API calls incl. downloadModel/downloadMainModel, `runPipeline()`, `analyzeLLM()` |
 | `lib/ws.ts` | 74 | WSClient class (connects to port 8000 directly) |
-| `lib/types/index.ts` | ~307 | All TypeScript interfaces + `PipelineStageType` union (7 types), `PipelineStageConfig` (with audio source, cover/repaint/track fields), `PipelineRequest`, `PipelineStageResult`, `PipelineResult` |
+| `lib/types/index.ts` | ~350 | All TypeScript interfaces + `AnalyzeRequest/Response`, `PipelineStageType` union (7 types), `PipelineStageConfig` (with audio source, cover/repaint/track fields), `PipelineRequest`, `PipelineStageResult`, `PipelineResult` |
 | `lib/constants.ts` | 47 | Languages, task types, instructions, etc. |
 | `lib/i18n/index.ts` | 28 | i18n helper (en only currently) |
 | **Stores (Zustand)** | | |

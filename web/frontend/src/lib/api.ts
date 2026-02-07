@@ -4,6 +4,8 @@ import type {
   GenerateRequest,
   CreateSampleRequest,
   FormatRequest,
+  AnalyzeRequest,
+  AnalyzeResponse,
 } from './types';
 
 const API_BASE = '/api';
@@ -75,6 +77,11 @@ export const formatSample = (req: FormatRequest) =>
   });
 export const understandMusic = (req: any) =>
   request<any>('/generation/understand', {
+    method: 'POST',
+    body: JSON.stringify(req),
+  });
+export const analyzeLLM = (req: AnalyzeRequest) =>
+  request<AnalyzeResponse>('/generation/analyze', {
     method: 'POST',
     body: JSON.stringify(req),
   });

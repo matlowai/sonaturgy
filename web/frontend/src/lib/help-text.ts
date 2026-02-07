@@ -160,3 +160,8 @@ export const HELP_ASSIST_REP_PENALTY =
 
 export const HELP_ASSIST_CONSTRAINED =
   'Enforce structured output from the AI Assist LLM for reliable parsing.';
+
+// ── Dynamic Slider Labels ──────────────────────────────────────────
+
+export const HELP_SIMILARITY_DENOISE =
+  'Controls similarity to reference audio during denoising. 1.0 = maximum similarity (all steps use reference conditioning). Lower values let the model diverge from the reference in later steps, giving more creative freedom.';

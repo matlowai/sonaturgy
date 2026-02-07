@@ -928,14 +928,15 @@ Agent generates: candidates with extracted params
 
 ## 12. Performance & Robustness Optimizations
 
-### Applied: `torch.inference_mode()` Over `torch.no_grad()`
+### Benchmarked: `torch.inference_mode()` vs `torch.no_grad()`
 
-`torch.inference_mode()` is strictly better than `torch.no_grad()` for inference paths.
-It disables both autograd AND version tracking, giving a measurable speed + memory improvement.
+Benchmarked on GPU — no measurable speed difference. `inference_mode` is stricter (tensors
+can't be used in autograd later), which would break RLHF/training where we need backprop
+through the diffusion loop.
 
-**Already swapped in:**
-- `diffusion_core.py:498` — main diffusion loop
-- `pipeline_executor.py` — `resolve_src_audio()` VAE decode, refine re-noise, final VAE decode
+**Current state:**
+- `diffusion_core.py` — **uses `no_grad()`** (reverted from `inference_mode` for training compatibility)
+- `pipeline_executor.py` — **uses `inference_mode()`** (VAE decode/re-noise only, never needs gradients)
 
 **Not touched (upstream files):**
 - `handler.py` — 15+ occurrences. Would need upstream acceptance or maintaining a patch.
@@ -1045,8 +1046,9 @@ multi-stage pipelines where each stage has different step counts and models.
 10. **Fine-tuning scope:** DiffusionDPO on full DiT? Just decoder? Condition encoder?
     VQ bottleneck? Different components benefit from different training signals.
 
-11. **Per-stage caption UX:** Collapsible override in StageBlock, or separate "stage
-    conditioning" panel? Should lyrics also be per-stage?
+11. ~~**Per-stage caption UX:**~~ **RESOLVED** — Implemented as collapsible per-stage
+    caption + lyrics override in StageBlock.tsx. Both caption and lyrics are per-stage.
+    Executor uses `stage.caption or req.caption` fallback. See Gap 1 above.
 
 ### Needs Infrastructure
 
