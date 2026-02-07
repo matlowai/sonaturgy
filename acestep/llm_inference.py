@@ -943,6 +943,7 @@ class LLMHandler:
         # Initialize variables
         metadata = {}
         audio_codes = ""
+        cot_output_text = ""
         has_all_metas = self.has_all_metas(user_metadata)
         phase1_time = 0.0
         phase2_time = 0.0
@@ -1022,6 +1023,7 @@ class LLMHandler:
         
         # If infer_type is 'dit', stop here and return only metadata
         if infer_type == "dit":
+            # Include raw CoT text for display in preview UI
             if is_batch:
                 metadata_list = [metadata.copy() for _ in range(actual_batch_size)]
                 return {
@@ -1033,7 +1035,8 @@ class LLMHandler:
                         "time_costs": {
                             "phase1_time": phase1_time,
                             "total_time": phase1_time,
-                        }
+                        },
+                        "thinking_text": cot_output_text,
                     },
                 }
             else:
@@ -1046,7 +1049,8 @@ class LLMHandler:
                         "time_costs": {
                             "phase1_time": phase1_time,
                             "total_time": phase1_time,
-                        }
+                        },
+                        "thinking_text": cot_output_text,
                     },
                 }
         

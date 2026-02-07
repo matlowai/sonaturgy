@@ -146,3 +146,40 @@ class UnderstandResponse(BaseModel):
     language: str = ""
     timesignature: str = ""
     status_message: str = ""
+
+
+class AnalyzeRequest(BaseModel):
+    """Request for analysis-only LLM preview (Phase 1 only, no diffusion)."""
+    caption: str = ""
+    lyrics: str = ""
+    instrumental: bool = False
+
+    # Metadata hints (passed as user_metadata to skip CoT for provided fields)
+    vocal_language: str = "unknown"
+    bpm: Optional[int] = None
+    keyscale: str = ""
+    timesignature: str = ""
+    duration: float = -1.0
+
+    # LM parameters
+    lm_temperature: float = 0.85
+    lm_cfg_scale: float = 2.0
+    lm_top_k: int = 0
+    lm_top_p: float = 0.9
+    lm_negative_prompt: str = "NO USER INPUT"
+    use_cot_metas: bool = True
+    use_cot_caption: bool = True
+    use_cot_language: bool = True
+    use_constrained_decoding: bool = True
+
+
+class AnalyzeResponse(BaseModel):
+    """Response from analysis-only LLM preview."""
+    caption: str = ""
+    bpm: Optional[int] = None
+    keyscale: str = ""
+    duration: Optional[float] = None
+    language: str = ""
+    timesignature: str = ""
+    thinking_text: str = ""
+    phase1_time: float = 0.0

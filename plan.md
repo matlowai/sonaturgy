@@ -190,6 +190,19 @@ These features exist in the Python backend but aren't fully exposed in the web U
 - Fixed nested `<button>` in StageBlock.tsx (caption toggle contained Tooltip's `<button>`)
 - Changed to `<div role="button">` with keyboard handler for accessibility
 
+**11. LLM Preview (Analysis-Only)** ✅ DONE
+- New `POST /generation/analyze` endpoint — runs `generate_with_stop_condition(infer_type="dit")`, Phase 1 only
+- Returns metadata (BPM, key, duration, language, rewritten caption, raw CoT) in ~1-2 seconds
+- "Preview LLM" button in CustomMode (visible when LLM initialized), collapsible result panel with Apply
+- Expandable raw CoT output section
+- Modified: `llm_inference.py` (expose `thinking_text` in extra_outputs), `schemas/generation.py` (AnalyzeRequest/Response), `routers/generation.py`, `api.ts`, `types/index.ts`, `CustomMode.tsx`, `i18n/en.json`, `help-text.ts`
+
+**12. Dynamic Slider Labels** ✅ DONE
+- Cover strength slider now shows for text2music + reference audio as "Similarity / Denoise"
+- Label changes based on context: cover → "Audio Cover Strength", text2music + ref audio → "Similarity / Denoise"
+- New i18n keys: `similarity_denoise_label`, `similarity_denoise_info`
+- New help text: `HELP_SIMILARITY_DENOISE`
+
 ### Recent Session — GitHub & Infrastructure (Feb 2026)
 - **GitHub setup:** Fork at `matlowai/sonaturgy`, private backup at `matlowai/web-audio`
 - **Rebased** onto 35 new upstream commits (clean, zero conflicts)

@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback } from 'react';
+import { useCallback, useState } from 'react';
 import { useGenerationStore } from '@/stores/generationStore';
 import { useServiceStore } from '@/stores/serviceStore';
 import { useUIStore } from '@/stores/uiStore';
@@ -9,12 +9,13 @@ import { t } from '@/lib/i18n';
 import {
   VALID_LANGUAGES, LANGUAGE_NAMES, TASK_TYPES, TASK_TYPES_TURBO,
   TASK_INSTRUCTIONS, TRACK_NAMES, TIME_SIGNATURES,
-  BPM_MIN, BPM_MAX, DURATION_MIN, DURATION_MAX,
+  BPM_MIN, BPM_MAX, DURATION_MAX,
 } from '@/lib/constants';
 import { AudioUpload } from '@/components/common/AudioUpload';
 import { LLMAssist } from '@/components/common/LLMAssist';
 import * as api from '@/lib/api';
 import { AutoTextarea } from '@/components/common/AutoTextarea';
+import type { AnalyzeResponse } from '@/lib/types';
 
 export function CustomMode() {
   const gen = useGenerationStore();
@@ -23,13 +24,26 @@ export function CustomMode() {
   const { formatCaption } = useGeneration();
   const { addToast } = useUIStore();
 
+  // LLM Preview state
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewResult, setPreviewResult] = useState<AnalyzeResponse | null>(null);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [rawExpanded, setCotExpanded] = useState(false);
+
   const availableTaskTypes = status.is_turbo ? TASK_TYPES_TURBO : TASK_TYPES;
 
   const needsSrcAudio = ['cover', 'repaint', 'lego', 'extract', 'complete'].includes(gen.taskType);
   const needsTrackName = ['lego', 'extract'].includes(gen.taskType);
   const needsCompleteClasses = gen.taskType === 'complete';
   const needsRepainting = ['repaint', 'lego'].includes(gen.taskType);
-  const needsCoverStrength = gen.taskType === 'cover';
+
+  // Dynamic strength slider: cover mode OR text2music with reference audio
+  const isCover = gen.taskType === 'cover';
+  const hasReferenceAudio = gen.taskType === 'text2music' && gen.referenceAudioId !== null;
+  const showStrengthSlider = isCover || hasReferenceAudio;
+  const strengthLabel = isCover
+    ? t(language, 'generation.cover_strength_label')
+    : t(language, 'generation.similarity_denoise_label');
 
   const updateInstruction = useCallback((taskType: string, trackName?: string, trackClasses?: string[]) => {
     let instruction = TASK_INSTRUCTIONS[taskType] || TASK_INSTRUCTIONS.text2music;
@@ -73,6 +87,64 @@ export function CustomMode() {
     } catch (e: any) {
       addToast(e.message, 'error');
     }
+  };
+
+  const handlePreviewLLM = async () => {
+    if (!gen.caption && !gen.lyrics) {
+      addToast('Enter a caption or lyrics first', 'info');
+      return;
+    }
+    setPreviewLoading(true);
+    setPreviewResult(null);
+    setPreviewOpen(true);
+    try {
+      const resp = await api.analyzeLLM({
+        caption: gen.caption,
+        lyrics: gen.lyrics,
+        instrumental: gen.instrumental,
+        vocal_language: gen.vocalLanguage,
+        bpm: gen.bpm ? parseInt(gen.bpm as string) || null : null,
+        keyscale: gen.keyscale,
+        timesignature: gen.timesignature,
+        duration: gen.duration,
+        lm_temperature: gen.lmTemperature,
+        lm_cfg_scale: gen.lmCfgScale,
+        lm_top_k: gen.lmTopK,
+        lm_top_p: gen.lmTopP,
+        lm_negative_prompt: gen.lmNegativePrompt,
+        use_cot_metas: gen.useCotMetas,
+        use_cot_caption: gen.useCotCaption,
+        use_cot_language: gen.useCotLanguage,
+        use_constrained_decoding: gen.useConstrainedDecoding,
+      });
+      if (resp.success && resp.data) {
+        setPreviewResult(resp.data);
+      } else {
+        addToast(resp.error || 'Preview failed', 'error');
+      }
+    } catch (e: any) {
+      addToast(e.message, 'error');
+    } finally {
+      setPreviewLoading(false);
+    }
+  };
+
+  const handleApplyPreview = () => {
+    if (!previewResult) return;
+    const updates: Record<string, any> = {};
+    if (previewResult.caption) {
+      updates.caption = previewResult.caption;
+      updates.isFormatCaption = true;
+    }
+    if (previewResult.bpm != null) updates.bpm = String(previewResult.bpm);
+    if (previewResult.keyscale) updates.keyscale = previewResult.keyscale;
+    if (previewResult.duration != null && previewResult.duration > 0) {
+      updates.duration = previewResult.duration;
+    }
+    if (previewResult.language) updates.vocalLanguage = previewResult.language;
+    if (previewResult.timesignature) updates.timesignature = previewResult.timesignature;
+    gen.setFields(updates);
+    addToast('Preview metadata applied', 'success');
   };
 
   return (
@@ -173,6 +245,17 @@ export function CustomMode() {
           <div className="flex items-center justify-between">
             <label className="label">{t(language, 'generation.caption_label')}</label>
             <div className="flex gap-1">
+              {status.llm_initialized && (
+                <button
+                  className="btn btn-secondary btn-sm"
+                  onClick={handlePreviewLLM}
+                  disabled={previewLoading}
+                >
+                  {previewLoading
+                    ? t(language, 'generation.preview_llm_loading')
+                    : t(language, 'generation.preview_llm_btn')}
+                </button>
+              )}
               <button className="btn btn-secondary btn-sm" onClick={handleRandomCaption}>Random</button>
               <button className="btn btn-secondary btn-sm" onClick={formatCaption}>
                 {t(language, 'generation.format_btn')}
@@ -189,6 +272,106 @@ export function CustomMode() {
             className="w-full"
           />
         </div>
+
+        {/* LLM Preview Panel */}
+        {previewOpen && (
+          <div className="border border-blue-500/30 rounded-lg bg-blue-500/5 p-3 space-y-2">
+            <div className="flex items-center justify-between">
+              <h4 className="text-sm font-medium text-blue-400">
+                {t(language, 'generation.preview_title')}
+                {previewResult && (
+                  <span className="text-xs text-zinc-500 ml-2">
+                    {t(language, 'generation.preview_time').replace('{time}', previewResult.phase1_time.toFixed(2))}
+                  </span>
+                )}
+              </h4>
+              <div className="flex gap-1">
+                {previewResult && (
+                  <button className="btn btn-primary btn-sm" onClick={handleApplyPreview}>
+                    {t(language, 'generation.preview_apply_btn')}
+                  </button>
+                )}
+                <button
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => { setPreviewOpen(false); setPreviewResult(null); }}
+                >
+                  {t(language, 'generation.preview_close_btn')}
+                </button>
+              </div>
+            </div>
+
+            {previewLoading && (
+              <div className="flex items-center gap-2 text-sm text-zinc-400">
+                <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+                {t(language, 'generation.preview_llm_loading')}
+              </div>
+            )}
+
+            {previewResult && (
+              <div className="space-y-2">
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
+                  {previewResult.bpm != null && (
+                    <div>
+                      <span className="text-zinc-500">BPM:</span>{' '}
+                      <span className="text-zinc-200">{previewResult.bpm}</span>
+                    </div>
+                  )}
+                  {previewResult.keyscale && (
+                    <div>
+                      <span className="text-zinc-500">Key:</span>{' '}
+                      <span className="text-zinc-200">{previewResult.keyscale}</span>
+                    </div>
+                  )}
+                  {previewResult.duration != null && previewResult.duration > 0 && (
+                    <div>
+                      <span className="text-zinc-500">Duration:</span>{' '}
+                      <span className="text-zinc-200">{previewResult.duration}s</span>
+                    </div>
+                  )}
+                  {previewResult.language && (
+                    <div>
+                      <span className="text-zinc-500">Language:</span>{' '}
+                      <span className="text-zinc-200">{previewResult.language}</span>
+                    </div>
+                  )}
+                  {previewResult.timesignature && (
+                    <div>
+                      <span className="text-zinc-500">Time Sig:</span>{' '}
+                      <span className="text-zinc-200">{previewResult.timesignature}</span>
+                    </div>
+                  )}
+                </div>
+
+                {previewResult.caption && (
+                  <div className="text-xs">
+                    <span className="text-zinc-500">Rewritten Caption:</span>
+                    <p className="text-zinc-300 mt-1 whitespace-pre-wrap">{previewResult.caption}</p>
+                  </div>
+                )}
+
+                {previewResult.thinking_text && (
+                  <div className="text-xs">
+                    <button
+                      className="text-zinc-500 hover:text-zinc-300 flex items-center gap-1 cursor-pointer"
+                      onClick={() => setCotExpanded(!rawExpanded)}
+                    >
+                      <span className={`transition-transform ${rawExpanded ? 'rotate-90' : ''}`}>&#9654;</span>
+                      Raw LLM Output
+                    </button>
+                    {rawExpanded && (
+                      <pre className="mt-1 p-2 bg-zinc-900/50 rounded text-zinc-400 whitespace-pre-wrap max-h-48 overflow-y-auto">
+                        {previewResult.thinking_text}
+                      </pre>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
 
         <div>
           <label className="label">{t(language, 'generation.lyrics_label')}</label>
@@ -359,9 +542,9 @@ export function CustomMode() {
           </div>
         )}
 
-        {needsCoverStrength && (
+        {showStrengthSlider && (
           <div>
-            <label className="label">{t(language, 'generation.cover_strength_label')}: {gen.audioCoverStrength.toFixed(2)}</label>
+            <label className="label">{strengthLabel}: {gen.audioCoverStrength.toFixed(2)}</label>
             <input
               type="range"
               min="0"

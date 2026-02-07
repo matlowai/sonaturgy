@@ -161,6 +161,38 @@ export interface FormatResponse {
   status_message: string;
 }
 
+// Analysis (LLM preview)
+export interface AnalyzeRequest {
+  caption: string;
+  lyrics: string;
+  instrumental: boolean;
+  vocal_language: string;
+  bpm: number | null;
+  keyscale: string;
+  timesignature: string;
+  duration: number;
+  lm_temperature: number;
+  lm_cfg_scale: number;
+  lm_top_k: number;
+  lm_top_p: number;
+  lm_negative_prompt: string;
+  use_cot_metas: boolean;
+  use_cot_caption: boolean;
+  use_cot_language: boolean;
+  use_constrained_decoding: boolean;
+}
+
+export interface AnalyzeResponse {
+  caption: string;
+  bpm: number | null;
+  keyscale: string;
+  duration: number | null;
+  language: string;
+  timesignature: string;
+  thinking_text: string;
+  phase1_time: number;
+}
+
 // Model info
 export interface ModelInfo {
   name: string;
