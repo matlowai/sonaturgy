@@ -170,6 +170,41 @@ Star ACE-Step on GitHub and be instantly notified of new releases
 
 > **Requirements:** Python 3.11, CUDA GPU recommended (works on CPU/MPS but slower)
 
+### AMD / ROCm GPUs
+
+ACE-Step works with AMD GPUs via PyTorch ROCm builds.
+
+**Important:** The `uv run acestep` workflow currently installs CUDA PyTorch wheels and may overwrite an existing ROCm setup. `uv run acestep` is optimized for CUDA environments and may override ROCm PyTorch installations.
+
+#### Recommended workflow for AMD / ROCm users
+
+1. Create and activate a virtual environment manually:
+
+   ```bash
+   python -m venv .venv
+   source .venv/bin/activate
+   ```
+
+2. Install a ROCm-compatible PyTorch build:
+
+   ```bash
+   pip install torch --index-url https://download.pytorch.org/whl/rocm6.0
+   ```
+
+3. Install ACE-Step dependencies without using uv run:
+
+   ```bash
+   pip install -e .
+   ```
+
+4. Start the service directly:
+
+   ```bash
+   python -m acestep.acestep_v15_pipeline --port 7680
+   ```
+
+This avoids CUDA wheel replacement and has been confirmed to work on ROCm systems. On Windows, use `.venv\Scripts\activate` and the same steps.
+
 ### 🪟 Windows Portable Package (Recommended for Windows)
 
 For Windows users, we provide a portable package with pre-installed dependencies:
@@ -319,6 +354,8 @@ If you have `PortableGit/` folder in your package, you can:
 ---
 
 ### Standard Installation (All Platforms)
+
+> **AMD / ROCm users:** `uv run acestep` is optimized for CUDA and may override ROCm PyTorch. Use the [AMD / ROCm workflow](#amd--rocm-gpus) above instead.
 
 ### 1. Install uv (Package Manager)
 

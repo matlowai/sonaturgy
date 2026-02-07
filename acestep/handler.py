@@ -635,7 +635,10 @@ class AceStepHandler:
         """Check if tensor is on the target device (handles cuda vs cuda:0 comparison)."""
         if tensor is None:
             return True
-        target_type = "cpu" if target_device == "cpu" else "cuda"
+        try:
+            target_type = torch.device(target_device).type
+        except Exception:
+            target_type = str(target_device)
         return tensor.device.type == target_type
     
     def _ensure_silence_latent_on_device(self):
@@ -1730,7 +1733,11 @@ class AceStepHandler:
 
         # Normalize audio_code_hints to batch list
         audio_code_hints = self._normalize_audio_code_hints(audio_code_hints, batch_size)
-        
+
+        # Guard: refer_audios can be None when reference audio UI path didn't populate it (e.g. TEXT2MUSIC)
+        if refer_audios is None:
+            refer_audios = [[torch.zeros(2, 30 * self.sample_rate)] for _ in range(batch_size)]
+
         for ii, refer_audio_list in enumerate(refer_audios):
             if isinstance(refer_audio_list, list):
                 for idx, refer_audio in enumerate(refer_audio_list):
@@ -2506,6 +2513,22 @@ class AceStepHandler:
             offload_wav_to_cpu: If True, offload decoded wav audio to CPU immediately to save VRAM
         """
         B, C, T = latents.shape
+        
+        # Check device type (handle both string and torch.device)
+        device_type = self.device if isinstance(self.device, str) else self.device.type
+        if device_type == "mps":
+            # MPS conv1d has an output length limit; use smaller chunks to avoid it.
+            max_chunk_size = 32
+            if chunk_size > max_chunk_size:
+                orig_chunk_size = chunk_size
+                orig_overlap = overlap
+                chunk_size = max_chunk_size
+                overlap = min(overlap, max(1, chunk_size // 4))
+                logger.warning(
+                    f"[tiled_decode] MPS device detected; reducing chunk_size from {orig_chunk_size} "
+                    f"to {max_chunk_size} and overlap from {orig_overlap} to {overlap} "
+                    f"to avoid MPS conv output limit."
+                )
         
         # If short enough, decode directly
         if T <= chunk_size:
