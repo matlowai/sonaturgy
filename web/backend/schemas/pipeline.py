@@ -10,6 +10,10 @@ class PipelineStageConfig(BaseModel):
     type: str = "generate"  # "generate", "refine", "cover", "repaint", "extract", "lego", "complete"
     input_stage: Optional[int] = None  # For refine: index of source latent stage
 
+    # Per-stage conditioning overrides (falls back to PipelineRequest shared values)
+    caption: Optional[str] = None
+    lyrics: Optional[str] = None
+
     # Audio source (for cover/repaint/extract/lego/complete — mutually exclusive)
     src_audio_id: Optional[str] = None  # Uploaded audio UUID from audio_store
     src_stage: Optional[int] = None     # Use output of this previous stage as source audio

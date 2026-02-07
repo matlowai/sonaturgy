@@ -239,6 +239,10 @@ export interface PipelineStageConfig {
   type: PipelineStageType;
   input_stage?: number;  // For refine: source latent stage index
 
+  // Per-stage conditioning overrides (falls back to shared PipelineRequest values)
+  caption?: string;
+  lyrics?: string;
+
   // Audio source (for cover/repaint/extract/lego/complete — mutually exclusive)
   src_audio_id?: string;    // Uploaded audio UUID
   src_stage?: number;       // Previous stage index to use as source audio

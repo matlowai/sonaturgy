@@ -56,7 +56,7 @@ def resolve_src_audio(
             )
         logger.info(f"[pipeline] Resolving src_audio from stage {stage.src_stage} (VAE decode)")
         latents = stage_latents[stage.src_stage]  # [batch, T, D] CPU
-        with torch.no_grad():
+        with torch.inference_mode():
             with dit_handler._load_model_context("vae"):
                 latents_gpu = (
                     latents.to(dit_handler.device)
@@ -70,7 +70,8 @@ def resolve_src_audio(
                 # Return batch item 0 as the shared source
                 result = pred_wavs[0].cpu()
                 del latents_gpu, pred_wavs
-                torch.cuda.empty_cache()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
                 return result
 
     return None
@@ -108,8 +109,8 @@ def run_pipeline(
 
     # ── Shared conditioning params ────────────────────────────────────
     batch_size = max(1, req.batch_size)
-    captions_batch = [req.caption] * batch_size
-    lyrics_batch = [req.lyrics] * batch_size
+    # Note: captions_batch and lyrics_batch are built per-stage below
+    # to support per-stage overrides (Gap 1)
 
     meta: Dict[str, Any] = {}
     if req.bpm is not None:
@@ -160,6 +161,12 @@ def run_pipeline(
         )
         logger.info(f"[pipeline] Starting {stage_label}")
 
+        # ── Per-stage conditioning (with fallback to shared) ──────────
+        stage_caption = stage.caption or req.caption
+        stage_lyrics = stage.lyrics or req.lyrics
+        captions_batch = [stage_caption] * batch_size
+        lyrics_batch = [stage_lyrics] * batch_size
+
         # ── Stage-specific setup ──────────────────────────────────────
         init_latents = None
         t_start = 1.0
@@ -177,7 +184,7 @@ def run_pipeline(
             t_start = stage.denoise
 
             if t_start < 1.0 - 1e-6:
-                with torch.no_grad():
+                with torch.inference_mode():
                     device = dit_handler.device
                     dtype = dit_handler.dtype
                     init_latents = dit_handler.model.renoise(
@@ -193,30 +200,33 @@ def run_pipeline(
                 stage, dit_handler, stage_latents, sample_rate
             )
             if src_audio is None:
-                raise ValueError(
-                    f"Stage {idx} ({stage.type}): could not resolve source audio"
+                # Safety fallback: degrade to text2music instead of crashing
+                logger.warning(
+                    f"[pipeline] Stage {idx} ({stage.type}): no source audio "
+                    f"resolved — falling back to text2music generation"
                 )
+                stage.type = "generate"
+            else:
+                # Expand to batch: [batch, 2, frames]
+                target_wavs = src_audio.unsqueeze(0).expand(batch_size, -1, -1)
 
-            # Expand to batch: [batch, 2, frames]
-            target_wavs = src_audio.unsqueeze(0).expand(batch_size, -1, -1)
+                # Build task instruction
+                instruction = build_stage_instruction(stage)
+                instructions = [instruction] * batch_size
 
-            # Build task instruction
-            instruction = build_stage_instruction(stage)
-            instructions = [instruction] * batch_size
+                # Cover-specific: use source as style reference + set strength
+                if stage.type == "cover":
+                    audio_cover_strength = stage.audio_cover_strength
+                    refer_audios = [[src_audio] for _ in range(batch_size)]
+                    if stage.audio_code_hints:
+                        audio_code_hints = [stage.audio_code_hints] * batch_size
 
-            # Cover-specific: use source as style reference + set strength
-            if stage.type == "cover":
-                audio_cover_strength = stage.audio_cover_strength
-                refer_audios = [[src_audio] for _ in range(batch_size)]
-                if stage.audio_code_hints:
-                    audio_code_hints = [stage.audio_code_hints] * batch_size
-
-            # Repaint-specific: set time range
-            elif stage.type == "repaint":
-                if stage.repainting_start is not None:
-                    repainting_start = [stage.repainting_start] * batch_size
-                if stage.repainting_end is not None:
-                    repainting_end = [stage.repainting_end] * batch_size
+                # Repaint-specific: set time range
+                elif stage.type == "repaint":
+                    if stage.repainting_start is not None:
+                        repainting_start = [stage.repainting_start] * batch_size
+                    if stage.repainting_end is not None:
+                        repainting_end = [stage.repainting_end] * batch_size
 
         # Prepare seeds
         if stage.seed < 0:
@@ -289,7 +299,7 @@ def run_pipeline(
     audio_results: List[Dict[str, Any]] = []
     vae_start = time.time()
 
-    with torch.no_grad():
+    with torch.inference_mode():
         with dit_handler._load_model_context("vae"):
             for stage_idx in sorted(decode_indices):
                 latents = stage_latents[stage_idx]
@@ -307,7 +317,8 @@ def run_pipeline(
                 pred_wavs = pred_wavs.cpu()
 
                 del latents_gpu
-                torch.cuda.empty_cache()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
 
                 # Save each batch item
                 for batch_idx in range(pred_wavs.shape[0]):

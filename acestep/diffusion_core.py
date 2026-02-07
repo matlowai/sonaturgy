@@ -495,7 +495,7 @@ def generate_audio_core(
     cover_cfg_doubled = False  # Track CFG doubling of non-cover states (once only)
 
     # ── Diffusion loop ────────────────────────────────────────────────
-    with torch.no_grad():
+    with torch.inference_mode():
         for step_idx in range(num_steps):
             t_curr = schedule[step_idx].item()
 

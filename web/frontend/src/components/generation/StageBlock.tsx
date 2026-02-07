@@ -2,7 +2,9 @@
 
 import { usePipelineStore, getDefaultStepsForModel, STAGE_DEFAULTS } from '@/stores/pipelineStore';
 import { INFER_METHODS, TRACK_NAMES } from '@/lib/constants';
+import { useState } from 'react';
 import { EditableNumber } from '@/components/common/EditableNumber';
+import { AutoTextarea } from '@/components/common/AutoTextarea';
 import { AudioUpload } from '@/components/common/AudioUpload';
 import { AudioSourceViewer } from '@/components/common/AudioSourceViewer';
 import { Tooltip } from '@/components/common/Tooltip';
@@ -88,6 +90,10 @@ export function StageBlock({ stage, index, totalStages }: StageBlockProps) {
     updateStage(index, updates);
   };
 
+  const [showCaptionOverride, setShowCaptionOverride] = useState(
+    Boolean(stage.caption || stage.lyrics)
+  );
+
   const previousStages = Array.from({ length: index }, (_, i) => i);
   const needsAudio = AUDIO_STAGE_TYPES.includes(stage.type);
   const isBaseOnly = BASE_ONLY_TYPES.includes(stage.type);
@@ -145,6 +151,57 @@ export function StageBlock({ stage, index, totalStages }: StageBlockProps) {
             <option key={m.value} value={m.value}>{m.label}</option>
           ))}
         </select>
+      </div>
+
+      {/* Per-stage caption/lyrics override (collapsible) */}
+      <div className="mb-3">
+        <button
+          type="button"
+          className="text-xs flex items-center gap-1"
+          style={{ color: 'var(--text-secondary)' }}
+          onClick={() => {
+            if (showCaptionOverride) {
+              // Collapsing — clear overrides
+              updateStage(index, { caption: undefined, lyrics: undefined });
+            }
+            setShowCaptionOverride(!showCaptionOverride);
+          }}
+        >
+          <span style={{ fontSize: '0.6rem' }}>{showCaptionOverride ? '\u25BC' : '\u25B6'}</span>
+          Stage Caption / Lyrics
+          {(stage.caption || stage.lyrics) && (
+            <span style={{ color: 'var(--accent)' }}>(overridden)</span>
+          )}
+          <Tooltip text={help.HELP_STAGE_CAPTION} />
+        </button>
+        {showCaptionOverride && (
+          <div className="mt-2 space-y-2 p-3 rounded" style={{ backgroundColor: 'var(--bg-secondary)' }}>
+            <div>
+              <label className="label">Caption override</label>
+              <AutoTextarea
+                persistKey={`stage-caption-${index}`}
+                value={stage.caption || ''}
+                onChange={(e) => update('caption', e.target.value || undefined)}
+                placeholder="Leave empty to use shared caption"
+                className="w-full text-sm"
+                minRows={2}
+                maxRows={6}
+              />
+            </div>
+            <div>
+              <label className="label">Lyrics override</label>
+              <AutoTextarea
+                persistKey={`stage-lyrics-${index}`}
+                value={stage.lyrics || ''}
+                onChange={(e) => update('lyrics', e.target.value || undefined)}
+                placeholder="Leave empty to use shared lyrics"
+                className="w-full text-sm"
+                minRows={3}
+                maxRows={8}
+              />
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Refine: source stage selector */}

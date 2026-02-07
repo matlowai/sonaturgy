@@ -141,6 +141,9 @@ export const HELP_STAGE_PREVIEW =
 export const HELP_STAGE_INPUT =
   'Which previous stage\'s latent to use as input for refinement.';
 
+export const HELP_STAGE_CAPTION =
+  'Override the shared caption for this stage. Useful for applying different creative directions at each stage (e.g., "add lush strings" for a cover stage, "clean guitar" for a lego stage). Leave empty to use the shared caption.';
+
 // ── LLM Assist Parameters ───────────────────────────────────────────
 
 export const HELP_ASSIST_TEMPERATURE =

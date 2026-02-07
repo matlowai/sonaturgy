@@ -164,6 +164,18 @@ These features exist in the Python backend but aren't fully exposed in the web U
 - Schema: `pipeline.py` + `types/index.ts` with `src_audio_id`, `src_stage`, `audio_cover_strength`, `repainting_start/end`, `track_name`, `complete_track_classes`
 - Help text: All new tooltips in `help-text.ts`
 
+**7. Per-Stage Caption/Lyrics Override (Gap 1)** ✅ DONE
+- Optional `caption` and `lyrics` on `PipelineStageConfig` — per-stage override, falls back to shared
+- Executor: `stage.caption or req.caption` per stage
+- Frontend: collapsible per-stage caption/lyrics in `StageBlock.tsx`
+- Unlocks Pattern H (iterative prompt refinement) and targeted instrument descriptions
+
+**8. Performance & Safety Improvements** ✅ DONE
+- `torch.inference_mode()` in `diffusion_core.py` and `pipeline_executor.py` (faster than `no_grad`)
+- Cover safety fallback: audio stages with missing source → text2music + warning
+- Device-agnostic `empty_cache()` guards in pipeline executor
+- New Part VIII in `PIPELINE_FRAMEWORK.md` documenting applied + future optimizations
+
 ### Recent Session — GitHub & Infrastructure (Feb 2026)
 - **GitHub setup:** Fork at `matlowai/sonaturgy`, private backup at `matlowai/web-audio`
 - **Rebased** onto 35 new upstream commits (clean, zero conflicts)
@@ -180,6 +192,69 @@ From user testing: SFT model (32-50 steps) benefits from **guidance_scale 3-5** 
 
 ### Flash Attention Status
 The UI toggle works correctly end-to-end, but `flash_attn` package must be installed separately (`pip install flash-attn`). Without it, the handler silently falls back to SDPA. Now logs a warning when this happens. The `swap_dit_model` path correctly preserves the attention implementation from initial config.
+
+### Project Presets — Persist & Recall Full Configurations
+
+**Problem:** Every time the user opens the app, they re-select DiT model, LLM model, flash
+attention, offload settings, and advanced params (guidance scale, shift, CFG, etc.). Power
+users switching between workflows (fast drafting vs quality production vs cover sessions)
+have to manually reconfigure everything.
+
+**Scope:** A "Project Preset" captures the full configuration state:
+
+**Layer 1 — Service Config (left pane, `ServiceConfig.tsx`)**
+Currently `useState` (ephemeral). Should persist + recall:
+```
+configPath         "acestep-v15-turbo"       DiT model
+lmModelPath        "acestep-5Hz-lm-1.7B"     LLM model
+device             "auto"                     Device
+flashAttn          false                      Flash attention
+offloadCpu         false                      CPU offload
+offloadDit         false                      DiT-only offload
+compileModel       false                      torch.compile
+quantization       false                      int8 quantization
+backend            "vllm"                     LLM backend
+```
+
+**Layer 2 — Generation Defaults (`generationStore.ts`)**
+Already in Zustand but not persisted. Key fields to capture:
+```
+inferenceSteps     8            shift              1.0
+guidanceScale      7.0          inferMethod        "ode"
+thinking           true         lmTemperature      0.85
+lmCfgScale         2.0          useCotMetas        true
+audioCoverStrength 1.0          batchSize          2
+cfgIntervalStart   0.0          cfgIntervalEnd     1.0
+```
+
+**Layer 3 — Pipeline Defaults (`pipelineStore.ts`)**
+Already has user presets. Could optionally be bundled into project presets.
+
+**Implementation approach:**
+
+1. **Auto-save "last used"** — `localStorage` key `project-last-config`. On app load,
+   `ServiceConfig.tsx` reads this and initializes `useState` from it. Generation store
+   gets a `loadFromStorage()` action. This alone solves 80% of the annoyance.
+
+2. **Named presets** — `localStorage` key `project-presets`. Same pattern as pipeline presets:
+   `savePreset(name)` captures Layer 1 + Layer 2, `loadPreset(name)` restores both.
+
+3. **Built-in presets (ship 3-4):**
+   - **Fast Draft** — Turbo, no LLM, 8 steps, batch 4, shift 3
+   - **Quality** — Base, 1.7B LLM, 50 steps, batch 1, thinking on, shift 2
+   - **SFT + CFG** — SFT, 1.7B LLM, 50 steps, guidance 3-5, CFG interval 0.15-0.85
+   - **Cover Session** — Turbo, no LLM, cover_strength 0.5, 8 steps
+
+4. **UI:** Preset selector dropdown at top of sidebar (above DiT card), with save/delete.
+   Loading a preset both restores settings AND optionally auto-initializes the selected
+   models (with confirmation toast: "Load Base + 1.7B LLM?").
+
+**Key files:** `ServiceConfig.tsx` (migrate `useState` → persist), `generationStore.ts`
+(add `persist` middleware or manual load/save), new `projectPresetStore.ts` or extend
+existing stores.
+
+**Effort:** Medium. The "auto-save last used" is small (~30 lines). Named presets with
+UI is a proper feature.
 
 ### Future Ideas
 - [x] **DAW-style audio source viewer** ✅ — `AudioSourceViewer.tsx`: WaveSurfer.js waveform with scroll-wheel zoom, transport controls (⏮⏪◀▶⏸), progress bar, time display. Repaint: draggable red region overlay for visual mask selection. Phase C (minimap, beat grid, snap) still TODO

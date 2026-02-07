@@ -7,19 +7,35 @@
 
 ---
 
-## Last Session Summary (2026-02-05)
+## Last Session Summary (2026-02-06)
 
 **Completed this session:**
-1. **Pipeline Expansion: 7 Stage Types** — Expanded pipeline builder from 2 types (generate, refine) to 7:
-   - New types: cover, repaint, extract, lego, complete
-   - Backend: `resolve_src_audio()` helper (upload or VAE-decode previous stage latent), `build_stage_instruction()` (template substitution from `TASK_INSTRUCTIONS`), full stage-type routing in `pipeline_executor.py`
-   - Backend validation: audio source required, base-only model enforcement, track_name required for extract/lego
-   - Frontend: `StageBlock.tsx` with conditional UI (audio source toggle, cover strength slider, repaint range, track selector, complete multi-select, base-only model filtering)
-   - Frontend: `pipelineStore.ts` with `STAGE_DEFAULTS` map, 2 new presets, `removeStage` handles `src_stage` refs
-   - Schema + types: `src_audio_id`, `src_stage`, `audio_cover_strength`, `repainting_start/end`, `track_name`, `complete_track_classes`
+1. **Per-Stage Caption/Lyrics Override (Gap 1)** — Optional `caption` and `lyrics` fields on
+   `PipelineStageConfig`. Executor uses per-stage overrides when set, falls back to shared.
+   Frontend: collapsible per-stage caption/lyrics in `StageBlock.tsx`. Unlocks Pattern H
+   (iterative prompt refinement) and targeted instrument descriptions per stage.
+2. **Performance: `torch.inference_mode()`** — Replaced `torch.no_grad()` with
+   `torch.inference_mode()` in `diffusion_core.py` (diffusion loop) and `pipeline_executor.py`
+   (VAE decode, re-noise). Faster + less memory than `no_grad`.
+3. **Cover Safety Fallback** — Pipeline executor gracefully degrades audio stages with missing
+   source audio to text2music + warning log, instead of crashing.
+4. **Device-Agnostic Cache Cleanup** — `torch.cuda.empty_cache()` calls in pipeline_executor
+   now guard on `torch.cuda.is_available()`.
+5. **PIPELINE_FRAMEWORK.md Part VIII** — New section: Performance & Robustness Optimizations.
+   Documents applied changes + future patterns (auto VAE chunk sizing, LLM unload for pipeline
+   memory, training perf patterns for RLVR, progress estimation).
+6. **Community Fork Analysis** — Reviewed riversedge/ACE-Step-1.5 fork (7 commits, MPS support
+   + training improvements). Extracted applicable patterns documented in Part VIII.
 
-**Previously completed:**
-- Pipeline Builder Phases 0-4, LLM Assist, Layout fix, CoT Reasoning Display, Scheduler Override, LM Codes Strength wiring, Contextual Tooltips, Global Audio Player fix, LLM Sampler Settings, Audio Metadata Embedding, Prompt Library, Import Song, Export, Advanced Controls, Editable Sliders, AutoTextarea fix
+**Previous session:**
+1. **Cover Mechanism Deep Dive** — Full code-level analysis of instruction-routed architecture.
+2. **Pipeline Framework Document** — `web/PIPELINE_FRAMEWORK.md` with 8 parts.
+
+**Earlier sessions:**
+- Pipeline Expansion (7 Stage Types), AudioSourceViewer, Pipeline Builder Phases 0-4, LLM Assist,
+  Layout fix, CoT Reasoning Display, Scheduler Override, LM Codes Strength wiring, Contextual
+  Tooltips, Global Audio Player fix, LLM Sampler Settings, Audio Metadata Embedding, Prompt Library,
+  Import Song, Export, Advanced Controls, Editable Sliders, AutoTextarea fix
 
 **Dev servers:**
 - Backend: `.venv/bin/python web/backend/run.py` (port 8000)
@@ -30,7 +46,7 @@
 **Next up (P1):** Items 5-10 (Restore params, Send to Src, LM codes, Understand music, Auto toggles, Score/Codes sliders)
 
 **Files modified in `acestep/` (core Python — NOT just web/):**
-- `acestep/diffusion_core.py` — NEW (576 lines)
+- `acestep/diffusion_core.py` — NEW (576 lines), uses `torch.inference_mode()`
 - `acestep/handler.py` — MODIFIED (+26 lines: import, model_variant, generate_audio_core call, init_latents/t_start)
 - `acestep/inference.py` — MODIFIED (+6 lines: init_latents/t_start in GenerationParams)
 
@@ -1160,22 +1176,35 @@ needs `init_latents` and `t_start` parameters threaded at each level.
 **Checkpoint files: UNTOUCHED.** The model's own `generate_audio()` still exists in the
 downloaded checkpoint, but our handler never calls it — we call `generate_audio_core()` instead.
 
-### How Cover Task Currently Works (for context)
+### Cover Task — Mechanism Summary
 
-The cover task does NOT do latent-space img2img. It uses `audio_cover_strength` as a
-**conditioning switch**, not a denoise strength:
+> **Full deep dive:** See `web/PIPELINE_FRAMEWORK.md` Part I for the complete mechanism
+> analysis with code walkthroughs. This section is the quick reference.
 
-```python
-cover_steps = int(infer_steps * audio_cover_strength)
-for step_idx, (t_curr, t_prev) in enumerate(iterator):
-    if step_idx >= cover_steps:
-        # Switch from cover conditioning to text2music conditioning
-        encoder_hidden_states = encoder_hidden_states_non_cover
-```
+**Key insight:** Cover does NOT do latent-space img2img. It uses a **two-condition
+temporal switch** during denoising. Diffusion always starts from pure noise.
 
-All cover generation still starts from `xt = noise` (full noise). It's soft guidance
-blending, not true img2img. This is why the Pipeline Builder's latent-space approach
-will produce better results.
+**Instruction-based routing:** All 7 task types use the same model. The instruction string
+in the text prompt selects behavior. Cover is detected by substring match on
+`"generate audio semantic tokens"` + `"based on the given conditions"` in `handler.py:1884-1901`.
+This is fragile — custom instructions containing those substrings accidentally trigger cover mode.
+
+**VQ bottleneck (cover only):** `prepare_condition()` in `modeling_*.py:1607-1652` runs source
+latents through tokenize (25Hz→5Hz, VQ quantize) → detokenize (5Hz→25Hz). This strips timbre/texture
+but preserves melodic/rhythmic skeleton. The `torch.where(is_covers > 0, lm_hints, src_latents)`
+swap means **only cover uses the bottleneck** — extract/lego/complete get unquantized source latents.
+
+**Temporal switch:** `cover_steps = int(num_steps * strength)` in `diffusion_core.py:461`.
+Steps 0→cover_steps use source-conditioned context. Steps cover_steps→end switch to
+caption-only (silence context, DEFAULT_DIT_INSTRUCTION, KV cache reset). Early steps lock
+structure, late steps apply style — controlled by `audio_cover_strength`.
+
+**Code paths:**
+- Detection: `handler.py:1884-1901` (is_covers), `constants.py:79-89` (TASK_INSTRUCTIONS)
+- VQ bottleneck: `modeling_*.py:1638-1649` (tokenize/detokenize/swap)
+- Context injection: `modeling_*.py:1347` (channel-wise concat into decoder)
+- Temporal switch: `diffusion_core.py:416-528` (two conditions + loop switch)
+- Non-cover text: `handler.py:2050-2079` (same caption, DEFAULT instruction)
 
 ### Model Loading / Offloading
 
