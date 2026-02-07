@@ -7,6 +7,7 @@ import { useUIStore } from '@/stores/uiStore';
 import { usePlayerStore } from '@/stores/playerStore';
 import { t, tReplace } from '@/lib/i18n';
 import * as api from '@/lib/api';
+import { mapParamsToFields } from '@/hooks/useBatchNavigation';
 import type { AudioResult } from '@/lib/types';
 
 interface AudioCardProps {
@@ -112,6 +113,20 @@ export function AudioCard({ audio, index, taskId, batchIndex }: AudioCardProps) 
     addToast('Sent to source audio', 'success');
   };
 
+  const handleSendToRef = () => {
+    gen.setField('referenceAudioId', audio.id);
+    addToast('Sent to reference audio', 'success');
+  };
+
+  const handleRestoreParams = () => {
+    if (!audio.params) {
+      addToast('No params to restore', 'info');
+      return;
+    }
+    gen.setFields(mapParamsToFields(audio.params));
+    addToast(`Parameters restored from Sample ${index + 1}`, 'success');
+  };
+
   return (
     <div className="card">
       <div className="flex items-center gap-3 mb-2">
@@ -161,8 +176,14 @@ export function AudioCard({ audio, index, taskId, batchIndex }: AudioCardProps) 
             In playlist
           </span>
         )}
+        <button className="btn btn-secondary btn-sm" onClick={handleRestoreParams}>
+          {t(language, 'results.restore_btn')}
+        </button>
         <button className="btn btn-secondary btn-sm" onClick={handleSendToSrc}>
           {t(language, 'results.send_to_src_btn')}
+        </button>
+        <button className="btn btn-secondary btn-sm" onClick={handleSendToRef}>
+          {t(language, 'results.send_to_ref_btn')}
         </button>
         <a
           href={audioUrl}

@@ -62,8 +62,8 @@
 - **`generate_audio_core()` at `diffusion_core.py:302` is OUR diffusion loop** (replaces the
   model's own `generate_audio()`). This is where the temporal switch, KV cache reset, and
   init_latents/t_start logic lives. We own this file.
-- **Pipeline shared conditioning is at `pipeline_executor.py:111-112`** — `captions_batch` and
-  `lyrics_batch` use `req.caption` for ALL stages. Per-stage caption override (Gap 1) changes here.
+- **Pipeline per-stage conditioning is at `pipeline_executor.py:111-112`** — `captions_batch` and
+  `lyrics_batch` use `stage.caption or req.caption` per stage. Gap 1 ✅ implemented.
 - **The `is_covers` flag is set by INSTRUCTION SUBSTRING MATCHING** (`handler.py:1887-1900`),
   not by a task_type parameter. Cover instruction: "generate audio semantic tokens" + "based on
   the given conditions". The `has_code_hint` flag also triggers it.
@@ -566,7 +566,7 @@ Stage 2: COVER (src=mix.wav, strength=0.95)
 ```
 Less precise but works today.
 
-### Pattern H: Iterative Prompt Refinement (Needs Gap 1: Per-Stage Caption)
+### Pattern H: Iterative Prompt Refinement ✅ (Gap 1 Implemented)
 
 **Scenario:** Apply different creative directions at each stage.
 
@@ -580,7 +580,7 @@ Stage 3: COVER (src=Stage 2, strength=0.8)
 ```
 
 Each cover stage applies a different "edit instruction" while preserving structure.
-**Requires per-stage caption fields (Gap 1).**
+**Now possible** with per-stage caption/lyrics override in StageBlock.tsx.
 
 ### Pattern I: Quality Ladder with Branching (Needs Gap 3: Scoring)
 
@@ -1148,7 +1148,7 @@ multi-stage pipelines where each stage has different step counts and models.
 | 23-31 | `build_stage_instruction(stage)` | Stage config → instruction string | Looks up `TASK_INSTRUCTIONS[stage.type]`, substitutes `{TRACK_NAME}` and `{TRACK_CLASSES}`. Falls back to text2music |
 | 34-76 | `resolve_src_audio(stage, dit_handler, stage_latents, sample_rate)` | Get source audio tensor | Two paths: `stage.src_audio_id` → `audio_store.get_path()` → `dit_handler.process_src_audio()`. Or `stage.src_stage` → `stage_latents[src_stage]` → `dit_handler.tiled_decode()` → CPU `[2, frames]` tensor |
 | 79-230+ | `run_pipeline(task_id, dit_handler, req)` | **Main pipeline orchestrator** | Validates stages. For each stage: optional model swap (line 143-156), resolve source audio (line 190-219), prepare seeds/params, call `dit_handler.service_generate()` (line 227+), save latents to `stage_latents` dict |
-| 111-112 | (inside `run_pipeline`) | **Shared conditioning** | `captions_batch = [req.caption] * batch_size`, `lyrics_batch = [req.lyrics] * batch_size` — **THIS is where per-stage caption would need to change (Gap 1)** |
+| 111-112 | (inside `run_pipeline`) | **Per-stage conditioning** | `captions_batch = [stage.caption or req.caption] * batch_size`, `lyrics_batch = [stage.lyrics or req.lyrics] * batch_size` — **Gap 1 ✅ implemented** |
 | 174-188 | (inside `run_pipeline`) | Refine stage setup | `clean_latents = stage_latents[input_stage]`, `init_latents = model.renoise(clean_latents, t_start)` |
 | 190-219 | (inside `run_pipeline`) | Audio stage routing | Calls `resolve_src_audio()`, builds instruction via `build_stage_instruction()`, sets per-type kwargs (cover_strength, repainting_start/end, audio_code_hints) |
 | 208-212 | (inside `run_pipeline`) | Cover-specific setup | `audio_cover_strength = stage.audio_cover_strength`, `refer_audios = [[src_audio]]` (source also used as timbre reference) |
@@ -1157,7 +1157,7 @@ multi-stage pipelines where each stage has different step counts and models.
 
 | File:Line | Class | Key Fields | Notes |
 |-----------|-------|------------|-------|
-| `pipeline.py:7` | `PipelineStageConfig` | `type, input_stage, src_audio_id, src_stage, audio_cover_strength, audio_code_hints, repainting_start, repainting_end, track_name, complete_track_classes, model, steps, shift, denoise, seed, ...` | **No `caption` or `lyrics` field — that's Gap 1** |
+| `pipeline.py:7` | `PipelineStageConfig` | `type, input_stage, src_audio_id, src_stage, audio_cover_strength, audio_code_hints, repainting_start, repainting_end, track_name, complete_track_classes, caption, lyrics, model, steps, shift, denoise, seed, ...` | Per-stage `caption`/`lyrics` override (Gap 1 ✅) |
 | `pipeline.py:49` | `PipelineRequest` | `caption, lyrics, instrumental, vocal_language, bpm, keyscale, timesignature, duration, batch_size, thinking, lm_*, stages` | Shared conditioning for all stages |
 | `generation.py:7` | `GenerateRequest` | `task_type, instruction, caption, lyrics, ...` | Single-stage generation (Custom Mode). Has `instruction` field that pipeline doesn't use (builds its own) |
 

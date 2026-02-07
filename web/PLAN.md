@@ -489,16 +489,18 @@ And: `check_batch_size_limit(batch_size, gpu_config, lm_initialized) -> (bool, s
 
 ### P1 — Important
 
-#### [ ] 5. Restore Parameters from Result
+#### [ ] 5. Restore Parameters from Result — IN PROGRESS (`feature/restore-params-send-to-ref`)
 **Gradio has "Restore Parameters" button.** Each `AudioResult.params` stores the full generation config.
 - Add button in `AudioCard.tsx`
 - On click: parse `params` and call `gen.setFields(...)` to restore all values
-- **Key files:** `AudioCard.tsx`, `generationStore.ts`
+- **Part of the Unified Stage Architecture** — see `web/UNIFIED_STAGE_DESIGN.md` (vision) and `web/UNIFIED_STAGE_EXECUTION_SPEC.md` (implementation spec). Restore is Phase 0; latent persistence, resume, checkpoint, and cross-mode actions follow in Phases 1-5.
+- **Key files:** `AudioCard.tsx`, `generationStore.ts`, `useBatchNavigation.ts`
 
-#### [ ] 6. Send Result to Source Audio
+#### [ ] 6. Send Result to Source Audio / Reference — IN PROGRESS (`feature/restore-params-send-to-ref`)
 **Gradio has "Send to Src" button.** Use a generated result as source for cover/repaint.
 - Add button in `AudioCard.tsx`
 - On click: set `gen.srcAudioId` to the audio's file ID, optionally switch task type
+- Also: "Send to Ref" button sets `gen.referenceAudioId`
 - **Key files:** `AudioCard.tsx`, `generationStore.ts`
 
 #### [ ] 7. LM Codes Display & Copy

@@ -356,6 +356,53 @@ def run_pipeline(
     stage_time_costs["vae_decode"] = time.time() - vae_start
     logger.info(f"[pipeline] VAE decode completed in {stage_time_costs['vae_decode']:.1f}s")
 
+    # ── Build per-stage params for Restore in UI ────────────────────
+    # Combine shared request-level fields with per-stage overrides
+    # so the frontend can restore params from any pipeline result.
+    shared_params = {
+        "caption": req.caption,
+        "lyrics": req.lyrics,
+        "instrumental": req.instrumental,
+        "vocal_language": req.vocal_language,
+        "bpm": req.bpm,
+        "keyscale": req.keyscale,
+        "timesignature": req.timesignature,
+        "duration": req.duration,
+        "thinking": req.thinking,
+        "lm_temperature": req.lm_temperature,
+        "lm_cfg_scale": req.lm_cfg_scale,
+        "lm_top_k": req.lm_top_k,
+        "lm_top_p": req.lm_top_p,
+        "lm_negative_prompt": req.lm_negative_prompt,
+        "use_cot_metas": req.use_cot_metas,
+        "use_cot_caption": req.use_cot_caption,
+        "use_cot_language": req.use_cot_language,
+        "use_constrained_decoding": req.use_constrained_decoding,
+    }
+
+    # Map stage index -> per-stage params dict
+    stage_params: Dict[int, Dict[str, Any]] = {}
+    for idx, stage in enumerate(req.stages):
+        stage_params[idx] = {
+            **shared_params,
+            "caption": stage.caption or req.caption,
+            "lyrics": stage.lyrics or req.lyrics,
+            "task_type": stage.type,
+            "inference_steps": stage.steps,
+            "guidance_scale": stage.guidance_scale,
+            "seed": stage.seed,
+            "shift": stage.shift,
+            "infer_method": stage.infer_method,
+            "use_adg": stage.use_adg,
+            "cfg_interval_start": stage.cfg_interval_start,
+            "cfg_interval_end": stage.cfg_interval_end,
+            "audio_cover_strength": stage.audio_cover_strength,
+        }
+
+    # Attach params to each audio result
+    for ar in audio_results:
+        ar["params"] = stage_params.get(ar["stage"], shared_params)
+
     return {
         "result": {
             "stages": audio_results,

@@ -25,6 +25,7 @@ export default function HomePage() {
           key: `pipeline-stage${s.stage}-b${s.batch}`,
           sample_rate: 48000,
           params: {
+            ...s.params,
             stage: s.stage,
             is_final: s.is_final,
             is_preview: s.is_preview,
@@ -34,7 +35,7 @@ export default function HomePage() {
         batch = {
           index: 0,
           audios,
-          params: { pipeline: true, time_costs: resultData.time_costs },
+          params: audios[0]?.params || { pipeline: true },
           taskId,
         };
       } else {
