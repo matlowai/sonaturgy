@@ -7,7 +7,8 @@ import { useUIStore } from '@/stores/uiStore';
 import { usePlayerStore } from '@/stores/playerStore';
 import { t, tReplace } from '@/lib/i18n';
 import * as api from '@/lib/api';
-import { mapParamsToFields } from '@/hooks/useBatchNavigation';
+import { mapParamsToFields, paramsToStage } from '@/lib/stageConversion';
+import { usePipelineStore } from '@/stores/pipelineStore';
 import type { AudioResult } from '@/lib/types';
 
 interface AudioCardProps {
@@ -25,6 +26,7 @@ export function AudioCard({ audio, index, taskId, batchIndex }: AudioCardProps) 
   const [showDetails, setShowDetails] = useState(false);
   const [scoringIdx, setScoringIdx] = useState(false);
   const [lrcingIdx, setLrcingIdx] = useState(false);
+  const [decodingLatent, setDecodingLatent] = useState(false);
 
   const scoreKey = `${taskId}-${index}`;
   const lrcKey = `${taskId}-${index}`;
@@ -116,6 +118,53 @@ export function AudioCard({ audio, index, taskId, batchIndex }: AudioCardProps) 
   const handleSendToRef = () => {
     gen.setField('referenceAudioId', audio.id);
     addToast('Sent to reference audio', 'success');
+  };
+
+  const handlePlayLatent = async () => {
+    if (!audio.latentId) return;
+    setDecodingLatent(true);
+    try {
+      const resp = await api.decodeLatent(audio.latentId);
+      if (resp.success) {
+        const previewUrl = api.getAudioUrl(resp.data.audio_id);
+        playTrack({
+          id: resp.data.audio_id,
+          url: previewUrl,
+          title: `Latent ${audio.latentId.slice(0, 8)}`,
+        });
+        addToast('Playing latent preview', 'success');
+      }
+    } catch (e: any) {
+      addToast(e.message, 'error');
+    } finally {
+      setDecodingLatent(false);
+    }
+  };
+
+  const handleAddToPipeline = () => {
+    if (!audio.params) {
+      addToast('No params to build stage from', 'info');
+      return;
+    }
+    const pipe = usePipelineStore.getState();
+    const stage = paramsToStage(audio.params, audio.latentId);
+    // Populate empty pipeline conditioning from result params
+    pipe.setFieldsIfEmpty({
+      caption: audio.params.caption || '',
+      lyrics: audio.params.lyrics || '',
+      instrumental: audio.params.instrumental ?? false,
+      vocalLanguage: audio.params.vocal_language || 'unknown',
+      bpm: audio.params.bpm ? String(audio.params.bpm) : '',
+      keyscale: audio.params.keyscale || '',
+      timesignature: audio.params.timesignature || '',
+      duration: audio.params.duration ?? -1,
+    });
+    // Clear stage-level overrides if they match pipeline conditioning
+    if (stage.caption && stage.caption === pipe.caption) stage.caption = undefined;
+    if (stage.lyrics && stage.lyrics === pipe.lyrics) stage.lyrics = undefined;
+    pipe.addStageFromConfig(stage);
+    gen.setMode('pipeline');
+    addToast(`Added to pipeline${audio.latentId ? ' (with latent)' : ''}`, 'success');
   };
 
   const handleResumeCheckpoint = () => {
@@ -211,6 +260,15 @@ export function AudioCard({ audio, index, taskId, batchIndex }: AudioCardProps) 
             latent
           </span>
         )}
+        {audio.latentId && (
+          <button
+            className="btn btn-secondary btn-sm"
+            onClick={handlePlayLatent}
+            disabled={decodingLatent}
+          >
+            {decodingLatent ? '...' : '\u25B6 Play Latent'}
+          </button>
+        )}
         {audio.latentCheckpointId && (
           <span
             className="text-xs px-1.5 py-0.5 rounded"
@@ -233,6 +291,9 @@ export function AudioCard({ audio, index, taskId, batchIndex }: AudioCardProps) 
         </button>
         <button className="btn btn-secondary btn-sm" onClick={handleSendToRef}>
           {t(language, 'results.send_to_ref_btn')}
+        </button>
+        <button className="btn btn-secondary btn-sm" onClick={handleAddToPipeline}>
+          + Pipeline
         </button>
         <a
           href={audioUrl}

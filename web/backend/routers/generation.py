@@ -1,9 +1,12 @@
 """Generation router: generate music, create-sample, format, understand."""
 
 import os
+import tempfile
 
+import soundfile as sf
 import torch
 from fastapi import APIRouter, Depends, HTTPException
+from loguru import logger
 
 from web.backend.dependencies import get_dit_handler, get_llm_handler
 from web.backend.schemas.common import ApiResponse
@@ -550,3 +553,85 @@ def start_pipeline(
 
     task_id = task_manager.submit(_run)
     return ApiResponse(data={"task_id": task_id})
+
+
+@router.get("/latent/{latent_id}/metadata")
+def get_latent_metadata(latent_id: str):
+    """Get metadata for a stored latent without loading tensor."""
+    record = latent_store.get_record(latent_id)
+    if record is None:
+        raise HTTPException(404, f"Latent '{latent_id}' not found")
+
+    return ApiResponse(data={
+        "id": record.id,
+        "shape": list(record.shape),
+        "dtype": record.dtype,
+        "model_variant": record.model_variant,
+        "stage_type": record.stage_type,
+        "is_checkpoint": record.is_checkpoint,
+        "checkpoint_step": record.checkpoint_step,
+        "total_steps": record.total_steps,
+        "params": record.params,
+        "lm_metadata": record.lm_metadata,
+        "batch_size": record.batch_size,
+        "created_at": record.created_at,
+        "pinned": record.pinned,
+    })
+
+
+@router.post("/latent/{latent_id}/decode")
+def decode_latent(
+    latent_id: str,
+    dit=Depends(get_dit_handler),
+):
+    """VAE-decode a stored latent to audio for preview.
+
+    Returns audio ID that can be played via /audio/files/{id}.
+    """
+    if dit.model is None:
+        raise HTTPException(400, "DiT service not initialized (VAE required)")
+
+    record = latent_store.get_record(latent_id)
+    if record is None:
+        raise HTTPException(404, f"Latent '{latent_id}' not found")
+
+    tensor = latent_store.get(latent_id)
+    if tensor is None:
+        raise HTTPException(500, f"Failed to load latent tensor '{latent_id}'")
+
+    # Stored latents are [B, T, D] — transpose to [B, D, T] for VAE decode
+    with torch.inference_mode():
+        with dit._load_model_context("vae"):
+            latents_gpu = (
+                tensor.to(dit.device)
+                .transpose(1, 2)
+                .contiguous()
+                .to(dit.vae.dtype)
+            )
+            audio_tensor = dit.tiled_decode(latents_gpu)  # [B, Channels, Samples]
+            if audio_tensor.dtype != torch.float32:
+                audio_tensor = audio_tensor.float()
+            del latents_gpu
+
+    # Convert first batch item to numpy [Samples, Channels]
+    audio_np = audio_tensor[0].cpu().numpy().T
+
+    # Save to temp file and register in audio_store
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+        sf.write(tmp.name, audio_np, dit.sample_rate, format="wav")
+        temp_path = tmp.name
+
+    entry = audio_store.store_file(temp_path)
+
+    try:
+        os.remove(temp_path)
+    except OSError:
+        pass
+
+    logger.info(f"Decoded latent {latent_id} -> audio {entry.id}")
+
+    return ApiResponse(data={
+        "audio_id": entry.id,
+        "latent_id": latent_id,
+        "sample_rate": dit.sample_rate,
+    })

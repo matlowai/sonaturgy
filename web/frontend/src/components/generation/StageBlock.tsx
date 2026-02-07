@@ -1,7 +1,10 @@
 'use client';
 
 import { usePipelineStore, getDefaultStepsForModel, STAGE_DEFAULTS } from '@/stores/pipelineStore';
+import { useGenerationStore } from '@/stores/generationStore';
+import { useUIStore } from '@/stores/uiStore';
 import { INFER_METHODS, TRACK_NAMES } from '@/lib/constants';
+import { stageToCustom } from '@/lib/stageConversion';
 import { useState } from 'react';
 import { EditableNumber } from '@/components/common/EditableNumber';
 import { AutoTextarea } from '@/components/common/AutoTextarea';
@@ -47,6 +50,24 @@ interface StageBlockProps {
 
 export function StageBlock({ stage, index, totalStages }: StageBlockProps) {
   const { updateStage, removeStage } = usePipelineStore();
+  const gen = useGenerationStore();
+  const { addToast } = useUIStore();
+
+  const handleSendToCustom = () => {
+    const pipe = usePipelineStore.getState();
+    const fields = stageToCustom(stage, {
+      caption: pipe.caption,
+      lyrics: pipe.lyrics,
+      instrumental: pipe.instrumental,
+      vocalLanguage: pipe.vocalLanguage,
+      bpm: pipe.bpm,
+      keyscale: pipe.keyscale,
+      timesignature: pipe.timesignature,
+      duration: pipe.duration,
+    });
+    gen.setFields(fields);
+    addToast('Sent to Custom mode', 'success');
+  };
 
   const update = (field: string, value: any) => {
     updateStage(index, { [field]: value });
@@ -93,6 +114,7 @@ export function StageBlock({ stage, index, totalStages }: StageBlockProps) {
   const [showCaptionOverride, setShowCaptionOverride] = useState(
     Boolean(stage.caption || stage.lyrics)
   );
+  const [diffusionOpen, setDiffusionOpen] = useState(false);
 
   const previousStages = Array.from({ length: index }, (_, i) => i);
   const needsAudio = AUDIO_STAGE_TYPES.includes(stage.type);
@@ -128,15 +150,25 @@ export function StageBlock({ stage, index, totalStages }: StageBlockProps) {
           </select>
           <Tooltip text={help.HELP_STAGE_TYPE} />
         </div>
-        {totalStages > 1 && (
+        <div className="flex items-center gap-1">
           <button
             className="text-xs px-2 py-1 rounded hover:opacity-70"
-            style={{ color: 'var(--text-secondary)' }}
-            onClick={() => removeStage(index)}
+            style={{ color: 'var(--accent)' }}
+            onClick={handleSendToCustom}
+            title="Send this stage's settings to Custom mode"
           >
-            &times; Remove
+            &rarr; Custom
           </button>
-        )}
+          {totalStages > 1 && (
+            <button
+              className="text-xs px-2 py-1 rounded hover:opacity-70"
+              style={{ color: 'var(--text-secondary)' }}
+              onClick={() => removeStage(index)}
+            >
+              &times; Remove
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Model selector */}
@@ -390,152 +422,174 @@ export function StageBlock({ stage, index, totalStages }: StageBlockProps) {
         </div>
       )}
 
-      {/* Main params grid */}
-      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-        <div>
-          <label className="label">
-            Steps:<Tooltip text={help.HELP_INFERENCE_STEPS} />{' '}
-            <EditableNumber
-              value={stage.steps}
-              onChange={(v) => update('steps', v)}
-              min={1}
-              step={1}
-            />
-          </label>
-          <input
-            type="range"
-            min={1} max={100} step={1}
-            value={Math.min(stage.steps, 100)}
-            onChange={(e) => update('steps', parseInt(e.target.value))}
-          />
+      {/* Diffusion Parameters (collapsible) */}
+      <div className="mb-0">
+        <div
+          className="collapsible-header mb-2"
+          onClick={() => setDiffusionOpen(!diffusionOpen)}
+        >
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-medium">Diffusion Parameters</span>
+            {!diffusionOpen && (
+              <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+                {stage.steps} steps, shift {stage.shift.toFixed(1)}, {stage.infer_method}
+                {stage.type === 'refine' && `, denoise ${stage.denoise.toFixed(2)}`}
+              </span>
+            )}
+          </div>
+          <span className="text-sm">{diffusionOpen ? '\u25B2' : '\u25BC'}</span>
         </div>
 
-        <div>
-          <label className="label">
-            Shift:<Tooltip text={help.HELP_SHIFT} />{' '}
-            <EditableNumber
-              value={stage.shift}
-              onChange={(v) => update('shift', v)}
-              min={0.1}
-              max={10}
-              step={0.1}
-              decimals={1}
-            />
-          </label>
-          <input
-            type="range"
-            min={1} max={5} step={0.1}
-            value={stage.shift}
-            onChange={(e) => update('shift', parseFloat(e.target.value))}
-          />
-        </div>
+        {diffusionOpen && (
+          <div className="space-y-3">
+            {/* Main params grid */}
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+              <div>
+                <label className="label">
+                  Steps:<Tooltip text={help.HELP_INFERENCE_STEPS} />{' '}
+                  <EditableNumber
+                    value={stage.steps}
+                    onChange={(v) => update('steps', v)}
+                    min={1}
+                    step={1}
+                  />
+                </label>
+                <input
+                  type="range"
+                  min={1} max={100} step={1}
+                  value={Math.min(stage.steps, 100)}
+                  onChange={(e) => update('steps', parseInt(e.target.value))}
+                />
+              </div>
 
-        {stage.type === 'refine' && (
-          <div>
-            <label className="label">
-              Denoise:<Tooltip text={help.HELP_STAGE_DENOISE} />{' '}
-              <EditableNumber
-                value={stage.denoise}
-                onChange={(v) => update('denoise', v)}
-                min={0.05}
-                max={1.0}
-                step={0.05}
-                decimals={2}
+              <div>
+                <label className="label">
+                  Shift:<Tooltip text={help.HELP_SHIFT} />{' '}
+                  <EditableNumber
+                    value={stage.shift}
+                    onChange={(v) => update('shift', v)}
+                    min={0.1}
+                    max={10}
+                    step={0.1}
+                    decimals={1}
+                  />
+                </label>
+                <input
+                  type="range"
+                  min={1} max={5} step={0.1}
+                  value={stage.shift}
+                  onChange={(e) => update('shift', parseFloat(e.target.value))}
+                />
+              </div>
+
+              {stage.type === 'refine' && (
+                <div>
+                  <label className="label">
+                    Denoise:<Tooltip text={help.HELP_STAGE_DENOISE} />{' '}
+                    <EditableNumber
+                      value={stage.denoise}
+                      onChange={(v) => update('denoise', v)}
+                      min={0.05}
+                      max={1.0}
+                      step={0.05}
+                      decimals={2}
+                    />
+                  </label>
+                  <input
+                    type="range"
+                    min={0.05} max={1.0} step={0.05}
+                    value={stage.denoise}
+                    onChange={(e) => update('denoise', parseFloat(e.target.value))}
+                  />
+                </div>
+              )}
+
+              <div>
+                <label className="label">Seed<Tooltip text={help.HELP_SEED} /></label>
+                <input
+                  type="number"
+                  value={stage.seed}
+                  onChange={(e) => update('seed', parseInt(e.target.value) || -1)}
+                  className="w-full"
+                  placeholder="-1 = random"
+                />
+              </div>
+
+              <div>
+                <label className="label">Sampler<Tooltip text={help.HELP_INFER_METHOD} /></label>
+                <select
+                  value={stage.infer_method}
+                  onChange={(e) => update('infer_method', e.target.value)}
+                  className="w-full"
+                >
+                  {INFER_METHODS.map((m) => (
+                    <option key={m} value={m}>{m.toUpperCase()}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="label">Scheduler<Tooltip text={help.HELP_STAGE_SCHEDULER} /></label>
+                <select
+                  value={stage.scheduler || 'auto'}
+                  onChange={(e) => update('scheduler', e.target.value === 'auto' ? undefined : e.target.value)}
+                  className="w-full"
+                >
+                  <option value="auto">Auto (model default)</option>
+                  <option value="linear">Linear</option>
+                  <option value="discrete">Discrete (turbo 8-step)</option>
+                  <option value="continuous">Continuous</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="label">
+                  CFG:<Tooltip text={help.HELP_GUIDANCE_SCALE} />{' '}
+                  <EditableNumber
+                    value={stage.guidance_scale}
+                    onChange={(v) => update('guidance_scale', v)}
+                    min={1}
+                    max={30}
+                    step={0.5}
+                    decimals={1}
+                  />
+                </label>
+                <input
+                  type="range"
+                  min={1} max={15} step={0.5}
+                  value={stage.guidance_scale}
+                  onChange={(e) => update('guidance_scale', parseFloat(e.target.value))}
+                />
+              </div>
+            </div>
+
+            {/* ADG (stays inside collapsible) */}
+            <div className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={stage.use_adg}
+                onChange={(e) => update('use_adg', e.target.checked)}
+                id={`adg-${index}`}
               />
-            </label>
-            <input
-              type="range"
-              min={0.05} max={1.0} step={0.05}
-              value={stage.denoise}
-              onChange={(e) => update('denoise', parseFloat(e.target.value))}
-            />
+              <label htmlFor={`adg-${index}`} className="text-xs cursor-pointer">
+                ADG<Tooltip text={help.HELP_USE_ADG} />
+              </label>
+            </div>
           </div>
         )}
-
-        <div>
-          <label className="label">Seed<Tooltip text={help.HELP_SEED} /></label>
-          <input
-            type="number"
-            value={stage.seed}
-            onChange={(e) => update('seed', parseInt(e.target.value) || -1)}
-            className="w-full"
-            placeholder="-1 = random"
-          />
-        </div>
-
-        <div>
-          <label className="label">Sampler<Tooltip text={help.HELP_INFER_METHOD} /></label>
-          <select
-            value={stage.infer_method}
-            onChange={(e) => update('infer_method', e.target.value)}
-            className="w-full"
-          >
-            {INFER_METHODS.map((m) => (
-              <option key={m} value={m}>{m.toUpperCase()}</option>
-            ))}
-          </select>
-        </div>
-
-        <div>
-          <label className="label">Scheduler<Tooltip text={help.HELP_STAGE_SCHEDULER} /></label>
-          <select
-            value={stage.scheduler || 'auto'}
-            onChange={(e) => update('scheduler', e.target.value === 'auto' ? undefined : e.target.value)}
-            className="w-full"
-          >
-            <option value="auto">Auto (model default)</option>
-            <option value="linear">Linear</option>
-            <option value="discrete">Discrete (turbo 8-step)</option>
-            <option value="continuous">Continuous</option>
-          </select>
-        </div>
-
-        <div>
-          <label className="label">
-            CFG:<Tooltip text={help.HELP_GUIDANCE_SCALE} />{' '}
-            <EditableNumber
-              value={stage.guidance_scale}
-              onChange={(v) => update('guidance_scale', v)}
-              min={1}
-              max={30}
-              step={0.5}
-              decimals={1}
-            />
-          </label>
-          <input
-            type="range"
-            min={1} max={15} step={0.5}
-            value={stage.guidance_scale}
-            onChange={(e) => update('guidance_scale', parseFloat(e.target.value))}
-          />
-        </div>
       </div>
 
-      {/* Bottom row: preview + ADG */}
-      <div className="flex items-center gap-4 mt-3">
-        <div className="flex items-center gap-2">
-          <input
-            type="checkbox"
-            checked={stage.preview}
-            onChange={(e) => update('preview', e.target.checked)}
-            id={`preview-${index}`}
-          />
-          <label htmlFor={`preview-${index}`} className="text-xs cursor-pointer">
-            Preview audio<Tooltip text={help.HELP_STAGE_PREVIEW} />
-          </label>
-        </div>
-
-        <div className="flex items-center gap-2">
-          <input
-            type="checkbox"
-            checked={stage.use_adg}
-            onChange={(e) => update('use_adg', e.target.checked)}
-            id={`adg-${index}`}
-          />
-          <label htmlFor={`adg-${index}`} className="text-xs cursor-pointer">
-            ADG<Tooltip text={help.HELP_USE_ADG} />
-          </label>
-        </div>
+      {/* Preview — always visible outside collapsible */}
+      <div className="flex items-center gap-2 mt-2">
+        <input
+          type="checkbox"
+          checked={stage.preview}
+          onChange={(e) => update('preview', e.target.checked)}
+          id={`preview-${index}`}
+        />
+        <label htmlFor={`preview-${index}`} className="text-xs cursor-pointer">
+          Preview audio<Tooltip text={help.HELP_STAGE_PREVIEW} />
+        </label>
       </div>
     </div>
   );

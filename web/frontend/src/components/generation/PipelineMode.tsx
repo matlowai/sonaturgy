@@ -14,6 +14,8 @@ import {
   VALID_LANGUAGES, LANGUAGE_NAMES, TIME_SIGNATURES,
   BPM_MIN, BPM_MAX, DURATION_MIN, DURATION_MAX,
 } from '@/lib/constants';
+import { Tooltip } from '@/components/common/Tooltip';
+import * as help from '@/lib/help-text';
 import * as api from '@/lib/api';
 import type { PipelineRequest, PipelineStageConfig } from '@/lib/types';
 
@@ -25,6 +27,7 @@ export function PipelineMode() {
   const [saveName, setSaveName] = useState('');
   const [showSaveInput, setShowSaveInput] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [lmOpen, setLmOpen] = useState(false);
   const importInputRef = useRef<HTMLInputElement>(null);
 
   // Import song from previously generated audio file
@@ -137,6 +140,16 @@ export function PipelineMode() {
         keep_in_vram: pipe.keepInVram,
         audio_format: pipe.audioFormat,
         mp3_bitrate: pipe.mp3Bitrate,
+        thinking: pipe.thinking,
+        lm_temperature: pipe.lmTemperature,
+        lm_cfg_scale: pipe.lmCfgScale,
+        lm_top_k: pipe.lmTopK,
+        lm_top_p: pipe.lmTopP,
+        lm_negative_prompt: pipe.lmNegativePrompt,
+        use_cot_metas: pipe.useCotMetas,
+        use_cot_caption: pipe.useCotCaption,
+        use_cot_language: pipe.useCotLanguage,
+        use_constrained_decoding: pipe.useConstrainedDecoding,
         stages: pipe.stages,
       };
 
@@ -318,7 +331,6 @@ export function PipelineMode() {
               const dur = pipe.duration > 0 ? pipe.duration : 30;
               const batch = pipe.batchSize;
               let sizePerFile = 0;
-              let unit = 'MB';
 
               if (pipe.audioFormat === 'flac') {
                 sizePerFile = dur * 0.35; // ~350KB/s for 48kHz stereo FLAC
@@ -334,6 +346,104 @@ export function PipelineMode() {
               return `~${display}${batch > 1 ? ` (${batch} files)` : ''}`;
             })()}
           </div>
+        </div>
+
+        {/* LM Settings (collapsible) */}
+        <div className="pt-2 border-t" style={{ borderColor: 'var(--border)' }}>
+          <div className="collapsible-header" onClick={() => setLmOpen(!lmOpen)}>
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-medium">LM Settings</span>
+              {pipe.thinking && (
+                <span className="text-xs px-1.5 py-0.5 rounded" style={{ background: 'var(--accent)', color: 'white' }}>
+                  Thinking
+                </span>
+              )}
+            </div>
+            <span className="text-sm">{lmOpen ? '\u25B2' : '\u25BC'}</span>
+          </div>
+
+          {lmOpen && (
+            <div className="mt-3 space-y-3">
+              {/* Thinking checkbox — most prominent */}
+              <div className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={pipe.thinking}
+                  onChange={(e) => pipe.setField('thinking', e.target.checked)}
+                  id="pipe-thinking"
+                />
+                <label htmlFor="pipe-thinking" className="text-sm font-medium cursor-pointer">
+                  Enable Thinking (CoT)<Tooltip text={help.HELP_THINKING} />
+                </label>
+              </div>
+
+              {/* LM param sliders */}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <div>
+                  <label className="label">Temperature: {pipe.lmTemperature.toFixed(2)}<Tooltip text={help.HELP_LM_TEMPERATURE} /></label>
+                  <input
+                    type="range" min={0} max={2} step={0.05}
+                    value={pipe.lmTemperature}
+                    onChange={(e) => pipe.setField('lmTemperature', parseFloat(e.target.value))}
+                  />
+                </div>
+                <div>
+                  <label className="label">CFG Scale: {pipe.lmCfgScale.toFixed(1)}<Tooltip text={help.HELP_LM_CFG_SCALE} /></label>
+                  <input
+                    type="range" min={1} max={3} step={0.1}
+                    value={pipe.lmCfgScale}
+                    onChange={(e) => pipe.setField('lmCfgScale', parseFloat(e.target.value))}
+                  />
+                </div>
+                <div>
+                  <label className="label">Top K: {pipe.lmTopK}<Tooltip text={help.HELP_LM_TOP_K} /></label>
+                  <input
+                    type="range" min={0} max={100} step={1}
+                    value={pipe.lmTopK}
+                    onChange={(e) => pipe.setField('lmTopK', parseInt(e.target.value))}
+                  />
+                </div>
+                <div>
+                  <label className="label">Top P: {pipe.lmTopP.toFixed(2)}<Tooltip text={help.HELP_LM_TOP_P} /></label>
+                  <input
+                    type="range" min={0} max={1} step={0.05}
+                    value={pipe.lmTopP}
+                    onChange={(e) => pipe.setField('lmTopP', parseFloat(e.target.value))}
+                  />
+                </div>
+              </div>
+
+              {/* Negative prompt */}
+              <div>
+                <label className="label">LM Negative Prompt<Tooltip text={help.HELP_LM_NEGATIVE_PROMPT} /></label>
+                <input
+                  type="text"
+                  value={pipe.lmNegativePrompt}
+                  onChange={(e) => pipe.setField('lmNegativePrompt', e.target.value)}
+                  className="w-full text-xs"
+                />
+              </div>
+
+              {/* CoT checkboxes */}
+              <div className="flex flex-wrap gap-x-4 gap-y-2">
+                {[
+                  { key: 'useCotMetas', label: 'CoT Metas', tip: help.HELP_COT_METAS },
+                  { key: 'useCotCaption', label: 'Caption Rewrite', tip: help.HELP_COT_CAPTION },
+                  { key: 'useCotLanguage', label: 'CoT Language', tip: help.HELP_COT_LANGUAGE },
+                  { key: 'useConstrainedDecoding', label: 'Constrained Decoding', tip: help.HELP_CONSTRAINED_DECODING },
+                ].map(({ key, label, tip }) => (
+                  <label key={key} className="flex items-center gap-1.5 text-xs cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={(pipe as any)[key]}
+                      onChange={(e) => pipe.setField(key, e.target.checked)}
+                    />
+                    {label}<Tooltip text={tip} />
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </div>
 

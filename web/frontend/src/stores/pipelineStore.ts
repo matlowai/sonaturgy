@@ -248,6 +248,18 @@ interface PipelineState {
   audioFormat: string;
   mp3Bitrate: number;
 
+  // LM settings (shared across all stages)
+  thinking: boolean;
+  lmTemperature: number;
+  lmCfgScale: number;
+  lmTopK: number;
+  lmTopP: number;
+  lmNegativePrompt: string;
+  useCotMetas: boolean;
+  useCotCaption: boolean;
+  useCotLanguage: boolean;
+  useConstrainedDecoding: boolean;
+
   // VRAM management
   keepInVram: boolean;
 
@@ -261,6 +273,8 @@ interface PipelineState {
   // Actions
   setField: (field: string, value: any) => void;
   addStage: (type?: PipelineStageType) => void;
+  addStageFromConfig: (stage: PipelineStageConfig) => void;
+  setFieldsIfEmpty: (fields: Record<string, any>) => void;
   removeStage: (idx: number) => void;
   updateStage: (idx: number, updates: Partial<PipelineStageConfig>) => void;
   loadPreset: (preset: PipelinePreset) => void;
@@ -282,6 +296,17 @@ export const usePipelineStore = create<PipelineState>((set, get) => ({
   audioFormat: 'flac',
   mp3Bitrate: 320,
 
+  thinking: false,
+  lmTemperature: 0.85,
+  lmCfgScale: 2.0,
+  lmTopK: 0,
+  lmTopP: 0.9,
+  lmNegativePrompt: 'NO USER INPUT',
+  useCotMetas: false,
+  useCotCaption: false,
+  useCotLanguage: false,
+  useConstrainedDecoding: true,
+
   keepInVram: false,
 
   stages: [{ ...DEFAULT_GENERATE_STAGE }, { ...DEFAULT_REFINE_STAGE }],
@@ -302,6 +327,22 @@ export const usePipelineStore = create<PipelineState>((set, get) => ({
       stage.src_stage = s.stages.length - 1;
     }
     return { stages: [...s.stages, stage], activePreset: null };
+  }),
+
+  addStageFromConfig: (stage) => set((s) => ({
+    stages: [...s.stages, { ...stage }],
+    activePreset: null,
+  })),
+
+  setFieldsIfEmpty: (fields) => set((s) => {
+    const updates: Record<string, any> = {};
+    const isEmpty = (v: any) => v === '' || v === 'unknown' || v === -1 || v === false;
+    for (const [key, value] of Object.entries(fields)) {
+      if (key in s && isEmpty((s as any)[key]) && !isEmpty(value)) {
+        updates[key] = value;
+      }
+    }
+    return Object.keys(updates).length > 0 ? updates : {};
   }),
 
   removeStage: (idx) => set((s) => {

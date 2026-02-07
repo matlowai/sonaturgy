@@ -101,6 +101,15 @@ export const uploadAudio = async (file: File) => {
 };
 export const getAudioUrl = (fileId: string) =>
   `${API_BASE}/audio/files/${fileId}`;
+
+// Latent
+export const getLatentMetadata = (latentId: string) =>
+  request<any>(`/generation/latent/${latentId}/metadata`);
+export const decodeLatent = (latentId: string) =>
+  request<{ audio_id: string; latent_id: string; sample_rate: number }>(
+    `/generation/latent/${latentId}/decode`,
+    { method: 'POST' }
+  );
 export const convertToCodes = (audioId: string) =>
   request<{ audio_codes: string }>('/audio/convert-to-codes', {
     method: 'POST',

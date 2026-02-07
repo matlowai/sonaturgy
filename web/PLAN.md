@@ -7,22 +7,31 @@
 
 ---
 
-## Last Session Summary (2026-02-06)
+## Last Session Summary (2026-02-07)
 
-**Completed this session:**
-1. **LLM Preview (Analysis-Only)** — New `POST /analyze` endpoint runs Phase 1 only
-   (`generate_with_stop_condition(infer_type="dit")`) — returns metadata (BPM, key, duration,
-   language, rewritten caption, raw CoT thinking) in ~1-2 seconds. "Preview LLM" button in
-   CustomMode with collapsible result panel, Apply button, expandable raw CoT output.
-   Modified: `llm_inference.py` (expose `thinking_text`), `schemas/generation.py`,
-   `routers/generation.py`, `api.ts`, `types/index.ts`, `CustomMode.tsx`, `i18n/en.json`, `help-text.ts`.
-2. **Dynamic Slider Labels** — Cover strength slider now shows for text2music + reference audio
-   as "Similarity / Denoise" (was only visible for cover tasks). Label changes based on context.
+**Completed this session (Phase 6):**
+1. **Pipeline LM Settings** — Added thinking, lm_temperature, lm_cfg_scale, lm_top_k/p, negative prompt, CoT toggles, constrained decoding to Pipeline mode. Backend schema already had these fields; added frontend types, store state, UI section in PipelineMode.tsx, wired into request builder.
+2. **Collapsible StageBlock** — Diffusion params grid collapsed by default with summary line ("8 steps, shift 3.0, ode"). Preview checkbox pulled out to always-visible.
+3. **Backend Latent Endpoints** — `GET /latent/{id}/metadata` (shape, model, caption, timestamps) + `POST /latent/{id}/decode` (VAE decode → playable audio). Fixed shape transpose `[B,T,D]→[B,D,T]` and proper `_load_model_context("vae")`.
+4. **Enhanced Resume Panel** — AdvancedSettings auto-opens when latent set, fetches+displays metadata grid, "Preview" button decodes and plays via global player.
+5. **Play Latent on AudioCard** — Decode+play button next to latent badge on results.
+
+**Previous (same branch, Phase 5):**
+1. **Frontend Unification + Cross-Mode Actions** — Bidirectional Custom ↔ Pipeline flow.
+   - `StageParams` shared type in `types/index.ts`, `PipelineStageConfig extends StageParams`
+   - New `stageConversion.ts`: `customToStage()`, `stageToCustom()`, `paramsToStage()`, `mapParamsToFields()` (moved from useBatchNavigation)
+   - GenerationPanel: "+ Pipeline" button (Custom → Pipeline stage)
+   - StageBlock: "→ Custom" button (Pipeline stage → Custom mode)
+   - AudioCard: "+ Pipeline" button (result → Pipeline stage, carries latent)
+   - `pipelineStore`: `addStageFromConfig()`, `setFieldsIfEmpty()` actions
+   - Files: `types/index.ts`, `stageConversion.ts` (NEW), `useBatchNavigation.ts`, `pipelineStore.ts`, `GenerationPanel.tsx`, `StageBlock.tsx`, `AudioCard.tsx`
+2. **Resume API (Phase 3) + Step Checkpointing (Phase 4)** — implemented earlier on this branch
 
 **Previous session:**
-1. Project Presets (auto-save + named presets), inference_mode benchmark, hydration fix, GPU testing
-2. Per-Stage Caption/Lyrics Override, Cover Safety Fallback, Device-Agnostic Cache Cleanup
-3. PIPELINE_FRAMEWORK.md (8 parts), Community Fork Analysis
+1. LLM Preview (Analysis-Only), Dynamic Slider Labels
+2. Project Presets (auto-save + named presets), inference_mode benchmark, hydration fix, GPU testing
+3. Per-Stage Caption/Lyrics Override, Cover Safety Fallback, Device-Agnostic Cache Cleanup
+4. PIPELINE_FRAMEWORK.md (8 parts), Community Fork Analysis
 
 **Earlier sessions:**
 - Pipeline Expansion (7 Stage Types), AudioSourceViewer, Pipeline Builder Phases 0-4, LLM Assist,
@@ -35,9 +44,84 @@
 - Frontend: `cd web/frontend && npm run dev` (port 3000)
 - If frontend shows stale chunks: `rm -rf web/frontend/.next && npm run dev`
 
-**Next up (P0 remaining):** Item 4 in TODO below (GPU-aware limits)
-**Next up (P1):** Items 5-10 (Restore params, Send to Src, LM codes, Understand music, Auto toggles, Score/Codes sliders)
-**GPU test needed:** LLM Preview endpoint (analyze), per-stage caption/lyrics, extract/lego/complete
+**Next up (P0):** Custom↔Pipeline component DRY (see audit below), then GPU-aware limits
+**GPU test needed:** LLM Preview, per-stage caption/lyrics, extract/lego/complete, Resume API, Step Checkpointing, Latent decode
+
+---
+
+## Feature Parity Audit: Custom vs Pipeline
+
+### The Problem
+
+Custom mode (CustomMode + AdvancedSettings) and Pipeline mode (PipelineMode + StageBlock) are two views over mostly the same backend capabilities, but they were built independently. They should expose the **same features** — just with different things pre-expanded (Custom = single-stage detail view; Pipeline = multi-stage overview with collapsed details). Currently they have significant feature gaps.
+
+### What Custom has that Pipeline is missing
+
+| Feature | Custom Location | Pipeline Status | Fix |
+|---------|----------------|-----------------|-----|
+| **LLM Preview** button | CustomMode.tsx (line 92-130, 248-374) | **MISSING** — no "Preview LLM" button in pipeline conditioning | Extract `<LLMPreviewPanel>` component |
+| **LM Batch Chunk Size** slider | AdvancedSettings line 316 | **MISSING** — not in pipelineStore or PipelineMode LM section | Add to pipelineStore + PipelineMode LM section + request |
+| **LM Codes Strength** slider | AdvancedSettings line 323 | **MISSING** — not in backend PipelineRequest schema either | Add to backend schema + pipelineStore + UI |
+| **Constrained Decoding Debug** checkbox | AdvancedSettings line 341 | **MISSING** — not in pipeline | Add to pipelineStore + PipelineMode |
+| **Allow LM Batch** checkbox | AdvancedSettings line 342 | **MISSING** — not in pipeline | Add to pipelineStore + PipelineMode |
+| **Auto Score / Auto LRC** checkboxes | AdvancedSettings lines 343-344 | **MISSING** — pipeline results don't auto-score | Decide if pipeline needs these (probably yes) |
+| **Score Sensitivity** slider | AdvancedSettings line 358 | **MISSING** | Add if auto-score added |
+| **Random Seed** checkbox | AdvancedSettings line 179 | **MISSING** — pipeline stages only have seed field | Add as pipeline-level option |
+| **Audio Format / Custom Timesteps** | AdvancedSettings lines 202-221 | **Partial** — audio format is in PipelineMode, custom timesteps is per-stage `timesteps` field but no UI |  |
+| **Checkpoint Step** | AdvancedSettings line 224 | **MISSING** — per-stage on schema but no UI in StageBlock | Add to StageBlock diffusion params |
+| **Resume from Latent** panel | AdvancedSettings lines 72-131 | **N/A** — Pipeline doesn't have resume concept (stages chain latents internally) | Skip |
+| **Reference Audio** upload | CustomMode line 481-486 | **N/A** — Pipeline stages have per-stage src_audio | Different pattern, OK |
+| **Format Caption** button | CustomMode line 260 | **MISSING** — no format button in pipeline | Extract shared or add |
+| **Random Example** button | CustomMode line 259 | **MISSING** | Add or share |
+
+### What Pipeline has that Custom is missing
+
+| Feature | Pipeline Location | Custom Status | Notes |
+|---------|------------------|---------------|-------|
+| **Multi-stage orchestration** | StageBlock pipeline | N/A | Core pipeline-only feature |
+| **Per-stage model selection** | StageBlock line 176 | N/A | Custom uses service-level model |
+| **Per-stage caption/lyrics** | StageBlock line 188-237 | N/A | Custom has single set |
+| **Presets** (built-in + user) | PipelineMode lines 513-618 | Done in ServiceConfig | Different preset systems, OK |
+
+### Bugs & Issues Found in Review
+
+1. **Latent decode 500** — Fixed: stored latents are `[B,T,D]`, need `.transpose(1,2)` for VAE which expects `[B,D,T]`. Also needed `_load_model_context("vae")` and `vae.dtype` instead of `dit.dtype`.
+2. **Pipeline LM fields partial** — We added the core 10 fields but missed: `lm_batch_chunk_size`, `lm_codes_strength`, `constrained_decoding_debug`, `allow_lm_batch`. Backend schema also doesn't have all of these.
+3. **`unit` variable unused** — PipelineMode line 334: `let unit = 'MB'` declared but never used (size calculation inlines the unit). Harmless but messy.
+
+### DRY Strategy: Shared Components
+
+The right approach is **shared atomic components** that both modes compose, NOT wrapping everything in one mega-component with mode flags. Each shared component takes a `value`/`onChange` interface and is store-agnostic.
+
+**Phase 7 plan — Extract shared components:**
+
+1. **`<LMSettingsPanel>`** — Extracted from AdvancedSettings LM section
+   - Props: `{ values: LMSettings, onChange: (field, value) => void, expanded?: boolean }`
+   - `LMSettings` type: `{ thinking, lmTemperature, lmCfgScale, lmTopK, lmTopP, lmNegativePrompt, useCotMetas, useCotCaption, useCotLanguage, useConstrainedDecoding, constrainedDecodingDebug?, allowLmBatch?, lmBatchChunkSize?, lmCodesStrength? }`
+   - Used by: AdvancedSettings (reads from generationStore), PipelineMode (reads from pipelineStore)
+   - Both modes get identical UI, different data sources
+
+2. **`<LLMPreviewPanel>`** — Extracted from CustomMode lines 92-374
+   - Props: `{ caption, lyrics, instrumental, vocalLanguage, bpm, keyscale, timesignature, duration, lmSettings: LMSettings, onApplyMetadata: (meta) => void }`
+   - Self-contained: manages its own loading/result/expand state
+   - Used by: CustomMode (passes generationStore values), PipelineMode (passes pipelineStore values)
+   - Both modes get "Preview LLM" button + result panel
+
+3. **`<ConditioningGrid>`** — Extracted from both modes' metadata grid
+   - Props: `{ language, duration, bpm, keyscale, timesignature, batchSize, instrumental, onChange }`
+   - Currently duplicated between CustomMode and PipelineMode with slightly different layouts
+   - Low priority — layouts differ enough that extraction may not save much
+
+4. **Per-stage `checkpoint_step` UI** — Add to StageBlock collapsible diffusion params
+   - Simple number input, same as AdvancedSettings but per-stage
+   - Backend schema already has the field, just no frontend UI
+
+**Implementation order:**
+1. `<LMSettingsPanel>` — Biggest DRY win, most duplicated code
+2. `<LLMPreviewPanel>` — Important feature gap (pipeline has no LLM preview)
+3. Add missing pipelineStore fields (`lmBatchChunkSize`, `lmCodesStrength`, `constrainedDecodingDebug`, `allowLmBatch`)
+4. Add missing backend PipelineRequest fields to match
+5. StageBlock checkpoint_step UI
 
 **Files modified in `acestep/` (core Python — NOT just web/):**
 - `acestep/diffusion_core.py` — NEW (579 lines), uses `torch.no_grad()` (benchmarked `inference_mode` — no speed gain, kept `no_grad` for training compatibility)
@@ -489,18 +573,21 @@ And: `check_batch_size_limit(batch_size, gpu_config, lm_initialized) -> (bool, s
 
 ### P1 — Important
 
-#### [ ] 5. Restore Parameters from Result — IN PROGRESS (`feature/restore-params-send-to-ref`)
-**Gradio has "Restore Parameters" button.** Each `AudioResult.params` stores the full generation config.
-- Add button in `AudioCard.tsx`
-- On click: parse `params` and call `gen.setFields(...)` to restore all values
-- **Part of the Unified Stage Architecture** — see `web/UNIFIED_STAGE_DESIGN.md` (vision) and `web/UNIFIED_STAGE_EXECUTION_SPEC.md` (implementation spec). Restore is Phase 0; latent persistence, resume, checkpoint, and cross-mode actions follow in Phases 1-5.
-- **Key files:** `AudioCard.tsx`, `generationStore.ts`, `useBatchNavigation.ts`
+#### [x] 5. Restore Parameters + Cross-Mode Actions ✅ DONE (Phases 1-5, `feature/restore-params-send-to-ref`)
+**Full unified stage architecture implemented:**
+- **Phase 1-2:** Latent store with persistent storage and pipeline integration
+- **Phase 3:** Resume API — latent ID resolution, renoise, truncated schedule
+- **Phase 4:** Step Checkpointing — capture at step K, resume from checkpoint
+- **Phase 5:** Frontend Unification — `StageParams` shared type, `stageConversion.ts` utilities,
+  bidirectional Custom ↔ Pipeline flow, AudioCard → Pipeline with latent carry
+- **AudioCard buttons:** Restore Params, Resume Ckpt, + Pipeline, Send to Src, Send to Ref
+- **Key files:** `stageConversion.ts`, `AudioCard.tsx`, `GenerationPanel.tsx`, `StageBlock.tsx`,
+  `pipelineStore.ts`, `useBatchNavigation.ts`, `types/index.ts`
 
-#### [ ] 6. Send Result to Source Audio / Reference — IN PROGRESS (`feature/restore-params-send-to-ref`)
-**Gradio has "Send to Src" button.** Use a generated result as source for cover/repaint.
-- Add button in `AudioCard.tsx`
-- On click: set `gen.srcAudioId` to the audio's file ID, optionally switch task type
-- Also: "Send to Ref" button sets `gen.referenceAudioId`
+#### [x] 6. Send Result to Source Audio / Reference ✅ DONE (`feature/restore-params-send-to-ref`)
+- "Send to Src" button sets `gen.srcAudioId` to audio file ID
+- "Send to Ref" button sets `gen.referenceAudioId`
+- "+ Pipeline" button converts result to pipeline stage (with latent if available)
 - **Key files:** `AudioCard.tsx`, `generationStore.ts`
 
 #### [ ] 7. LM Codes Display & Copy
