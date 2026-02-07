@@ -10,26 +10,21 @@
 ## Last Session Summary (2026-02-06)
 
 **Completed this session:**
-1. **Per-Stage Caption/Lyrics Override (Gap 1)** — Optional `caption` and `lyrics` fields on
-   `PipelineStageConfig`. Executor uses per-stage overrides when set, falls back to shared.
-   Frontend: collapsible per-stage caption/lyrics in `StageBlock.tsx`. Unlocks Pattern H
-   (iterative prompt refinement) and targeted instrument descriptions per stage.
-2. **Performance: `torch.inference_mode()`** — Replaced `torch.no_grad()` with
-   `torch.inference_mode()` in `diffusion_core.py` (diffusion loop) and `pipeline_executor.py`
-   (VAE decode, re-noise). Faster + less memory than `no_grad`.
-3. **Cover Safety Fallback** — Pipeline executor gracefully degrades audio stages with missing
-   source audio to text2music + warning log, instead of crashing.
-4. **Device-Agnostic Cache Cleanup** — `torch.cuda.empty_cache()` calls in pipeline_executor
-   now guard on `torch.cuda.is_available()`.
-5. **PIPELINE_FRAMEWORK.md Part VIII** — New section: Performance & Robustness Optimizations.
-   Documents applied changes + future patterns (auto VAE chunk sizing, LLM unload for pipeline
-   memory, training perf patterns for RLVR, progress estimation).
-6. **Community Fork Analysis** — Reviewed riversedge/ACE-Step-1.5 fork (7 commits, MPS support
-   + training improvements). Extracted applicable patterns documented in Part VIII.
+1. **Project Presets** — Auto-save last used service config (9 fields) + generation settings
+   (29 fields) to localStorage. Named presets: 4 built-in (Fast Draft, Quality, SFT+CFG,
+   Cover Session) + user save/load/delete. Preset selector UI at top of sidebar.
+   New file: `web/frontend/src/lib/presets.ts`. Modified: `ServiceConfig.tsx`, `generationStore.ts`.
+2. **inference_mode benchmark** — Tested `torch.inference_mode()` vs `torch.no_grad()` on GPU.
+   No measurable speed difference. Reverted `diffusion_core.py` to `no_grad` for training
+   compatibility. Pipeline executor keeps `inference_mode` (VAE decode only).
+3. **Hydration fix** — Fixed nested `<button>` in StageBlock.tsx caption toggle (Tooltip
+   renders inner `<button>`). Changed to `<div role="button">` with keyboard handler.
+4. **GPU testing** — Cover and repaint work end-to-end. Both need enhancement.
+   Extract/lego/complete still untested.
 
 **Previous session:**
-1. **Cover Mechanism Deep Dive** — Full code-level analysis of instruction-routed architecture.
-2. **Pipeline Framework Document** — `web/PIPELINE_FRAMEWORK.md` with 8 parts.
+1. Per-Stage Caption/Lyrics Override, Cover Safety Fallback, Device-Agnostic Cache Cleanup
+2. PIPELINE_FRAMEWORK.md (8 parts), Community Fork Analysis
 
 **Earlier sessions:**
 - Pipeline Expansion (7 Stage Types), AudioSourceViewer, Pipeline Builder Phases 0-4, LLM Assist,
@@ -46,7 +41,7 @@
 **Next up (P1):** Items 5-10 (Restore params, Send to Src, LM codes, Understand music, Auto toggles, Score/Codes sliders)
 
 **Files modified in `acestep/` (core Python — NOT just web/):**
-- `acestep/diffusion_core.py` — NEW (576 lines), uses `torch.inference_mode()`
+- `acestep/diffusion_core.py` — NEW (579 lines), uses `torch.no_grad()` (benchmarked `inference_mode` — no speed gain, kept `no_grad` for training compatibility)
 - `acestep/handler.py` — MODIFIED (+26 lines: import, model_variant, generate_audio_core call, init_latents/t_start)
 - `acestep/inference.py` — MODIFIED (+6 lines: init_latents/t_start in GenerationParams)
 

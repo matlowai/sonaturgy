@@ -155,9 +155,10 @@ export function StageBlock({ stage, index, totalStages }: StageBlockProps) {
 
       {/* Per-stage caption/lyrics override (collapsible) */}
       <div className="mb-3">
-        <button
-          type="button"
-          className="text-xs flex items-center gap-1"
+        <div
+          role="button"
+          tabIndex={0}
+          className="text-xs flex items-center gap-1 cursor-pointer"
           style={{ color: 'var(--text-secondary)' }}
           onClick={() => {
             if (showCaptionOverride) {
@@ -166,6 +167,7 @@ export function StageBlock({ stage, index, totalStages }: StageBlockProps) {
             }
             setShowCaptionOverride(!showCaptionOverride);
           }}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setShowCaptionOverride(!showCaptionOverride); } }}
         >
           <span style={{ fontSize: '0.6rem' }}>{showCaptionOverride ? '\u25BC' : '\u25B6'}</span>
           Stage Caption / Lyrics
@@ -173,7 +175,7 @@ export function StageBlock({ stage, index, totalStages }: StageBlockProps) {
             <span style={{ color: 'var(--accent)' }}>(overridden)</span>
           )}
           <Tooltip text={help.HELP_STAGE_CAPTION} />
-        </button>
+        </div>
         {showCaptionOverride && (
           <div className="mt-2 space-y-2 p-3 rounded" style={{ backgroundColor: 'var(--bg-secondary)' }}>
             <div>

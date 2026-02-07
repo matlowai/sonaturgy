@@ -1,4 +1,10 @@
 import { create } from 'zustand';
+import {
+  loadLastGenerationConfig,
+  saveLastGenerationConfig,
+  GENERATION_SETTINGS_KEYS,
+} from '@/lib/presets';
+import type { GenerationConfigSnapshot } from '@/lib/presets';
 
 type GenerationMode = 'simple' | 'custom' | 'pipeline';
 
@@ -140,10 +146,37 @@ const defaults = {
   autoGen: false,
 };
 
-export const useGenerationStore = create<GenerationState>((set) => ({
-  ...defaults,
+// Merge saved settings into defaults (settings-only fields, not creative content)
+function getInitialState(): typeof defaults {
+  const saved = loadLastGenerationConfig();
+  if (!saved) return { ...defaults };
+  const merged = { ...defaults };
+  for (const key of GENERATION_SETTINGS_KEYS) {
+    if (key in saved && saved[key] !== undefined) {
+      (merged as any)[key] = saved[key];
+    }
+  }
+  return merged;
+}
+
+// Extract settings snapshot from full state
+function extractSettings(state: Record<string, any>): GenerationConfigSnapshot {
+  const snapshot: Record<string, any> = {};
+  for (const key of GENERATION_SETTINGS_KEYS) {
+    snapshot[key] = state[key];
+  }
+  return snapshot as GenerationConfigSnapshot;
+}
+
+export const useGenerationStore = create<GenerationState>((set, get) => ({
+  ...getInitialState(),
   setMode: (mode) => set({ mode }),
   setField: (field, value) => set({ [field]: value } as any),
   setFields: (fields) => set(fields as any),
   resetToDefaults: () => set(defaults),
 }));
+
+// Subscribe to persist settings on every state change
+useGenerationStore.subscribe((state) => {
+  saveLastGenerationConfig(extractSettings(state as any));
+});

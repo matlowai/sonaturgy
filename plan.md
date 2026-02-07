@@ -171,10 +171,24 @@ These features exist in the Python backend but aren't fully exposed in the web U
 - Unlocks Pattern H (iterative prompt refinement) and targeted instrument descriptions
 
 **8. Performance & Safety Improvements** ✅ DONE
-- `torch.inference_mode()` in `diffusion_core.py` and `pipeline_executor.py` (faster than `no_grad`)
+- `torch.inference_mode()` in `pipeline_executor.py` (VAE decode/re-noise). Benchmarked vs
+  `no_grad` in diffusion_core.py — no measurable speed difference, reverted to `no_grad` for
+  future training compatibility (RLHF/RLVR needs backprop through diffusion loop)
 - Cover safety fallback: audio stages with missing source → text2music + warning
 - Device-agnostic `empty_cache()` guards in pipeline executor
 - New Part VIII in `PIPELINE_FRAMEWORK.md` documenting applied + future optimizations
+
+**9. Project Presets — Persist & Recall Configuration** ✅ DONE
+- Auto-save "last used" service config (9 fields) + generation settings (29 fields) to localStorage
+- Named presets: 4 built-in (Fast Draft, Quality, SFT+CFG, Cover Session) + user save/load/delete
+- Settings-only persistence — creative content (caption, lyrics) starts fresh each session
+- New file: `web/frontend/src/lib/presets.ts` (types, helpers, built-in definitions)
+- Modified: `ServiceConfig.tsx` (restore/save effects + preset selector UI), `generationStore.ts`
+  (init from localStorage + subscribe to persist on change)
+
+**10. Hydration Fix** ✅ DONE
+- Fixed nested `<button>` in StageBlock.tsx (caption toggle contained Tooltip's `<button>`)
+- Changed to `<div role="button">` with keyboard handler for accessibility
 
 ### Recent Session — GitHub & Infrastructure (Feb 2026)
 - **GitHub setup:** Fork at `matlowai/sonaturgy`, private backup at `matlowai/web-audio`
@@ -193,7 +207,9 @@ From user testing: SFT model (32-50 steps) benefits from **guidance_scale 3-5** 
 ### Flash Attention Status
 The UI toggle works correctly end-to-end, but `flash_attn` package must be installed separately (`pip install flash-attn`). Without it, the handler silently falls back to SDPA. Now logs a warning when this happens. The `swap_dit_model` path correctly preserves the attention implementation from initial config.
 
-### Project Presets — Persist & Recall Full Configurations
+### Project Presets — Persist & Recall Full Configurations ✅ IMPLEMENTED
+
+> **Status:** Fully implemented in feature/project-presets branch. See item 9 above.
 
 **Problem:** Every time the user opens the app, they re-select DiT model, LLM model, flash
 attention, offload settings, and advanced params (guidance scale, shift, CFG, etc.). Power

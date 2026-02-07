@@ -8,6 +8,13 @@ import { t } from '@/lib/i18n';
 import { Spinner } from '@/components/common/Spinner';
 import * as api from '@/lib/api';
 import type { ModelInfo } from '@/lib/types';
+import {
+  loadLastServiceConfig, saveLastServiceConfig,
+  loadProjectPresets, saveProjectPresets,
+  BUILT_IN_PRESETS,
+} from '@/lib/presets';
+import type { ServiceConfigSnapshot, ProjectPreset, GenerationConfigSnapshot } from '@/lib/presets';
+import { useGenerationStore } from '@/stores/generationStore';
 
 function DownloadBadge({ downloaded }: { downloaded: boolean | undefined }) {
   if (downloaded === undefined) return null;
@@ -287,6 +294,107 @@ export function ServiceConfig() {
   const [showDitCompare, setShowDitCompare] = useState(false);
   const [showLmCompare, setShowLmCompare] = useState(false);
 
+  // Restore last-used service config from localStorage on mount
+  const restoredRef = useRef(false);
+  useEffect(() => {
+    if (restoredRef.current) return;
+    restoredRef.current = true;
+    const saved = loadLastServiceConfig();
+    if (!saved) return;
+    if (saved.configPath !== undefined) setConfigPath(saved.configPath);
+    if (saved.device !== undefined) setDevice(saved.device);
+    if (saved.flashAttn !== undefined) setFlashAttn(saved.flashAttn);
+    if (saved.offloadCpu !== undefined) setOffloadCpu(saved.offloadCpu);
+    if (saved.offloadDit !== undefined) setOffloadDit(saved.offloadDit);
+    if (saved.compileModel !== undefined) setCompileModel(saved.compileModel);
+    if (saved.quantization !== undefined) setQuantization(saved.quantization);
+    if (saved.lmModelPath !== undefined) setLmModelPath(saved.lmModelPath);
+    if (saved.backend !== undefined) setBackend(saved.backend);
+  }, []);
+
+  // Auto-save service config to localStorage on change
+  useEffect(() => {
+    if (!restoredRef.current) return; // Don't save during initial restore
+    const snapshot: ServiceConfigSnapshot = {
+      configPath, device, flashAttn, offloadCpu, offloadDit,
+      compileModel, quantization, lmModelPath, backend,
+    };
+    saveLastServiceConfig(snapshot);
+  }, [configPath, device, flashAttn, offloadCpu, offloadDit, compileModel, quantization, lmModelPath, backend]);
+
+  // ── Named Project Presets ──────────────────────────────────────────
+  const genStore = useGenerationStore();
+  const [userPresets, setUserPresets] = useState<ProjectPreset[]>(() => loadProjectPresets());
+  const [activePreset, setActivePreset] = useState<string | null>(null);
+  const [saveName, setSaveName] = useState('');
+  const [showSaveInput, setShowSaveInput] = useState(false);
+
+  const allPresets = [...BUILT_IN_PRESETS, ...userPresets];
+
+  const applyServiceConfig = useCallback((sc: ServiceConfigSnapshot) => {
+    setConfigPath(sc.configPath);
+    setDevice(sc.device);
+    setFlashAttn(sc.flashAttn);
+    setOffloadCpu(sc.offloadCpu);
+    setOffloadDit(sc.offloadDit);
+    setCompileModel(sc.compileModel);
+    setQuantization(sc.quantization);
+    setLmModelPath(sc.lmModelPath);
+    setBackend(sc.backend);
+  }, []);
+
+  const handleLoadPreset = useCallback((preset: ProjectPreset) => {
+    applyServiceConfig(preset.serviceConfig);
+    // Apply generation settings (only the keys present in the preset)
+    const genFields: Record<string, any> = {};
+    for (const [k, v] of Object.entries(preset.generationConfig)) {
+      if (v !== undefined) genFields[k] = v;
+    }
+    if (Object.keys(genFields).length > 0) {
+      genStore.setFields(genFields);
+    }
+    setActivePreset(preset.name);
+    ui.addToast(`Loaded preset: ${preset.name}`, 'info');
+  }, [applyServiceConfig, genStore, ui]);
+
+  const handleSavePreset = useCallback((name: string) => {
+    const sc: ServiceConfigSnapshot = {
+      configPath, device, flashAttn, offloadCpu, offloadDit,
+      compileModel, quantization, lmModelPath, backend,
+    };
+    const gc: Partial<GenerationConfigSnapshot> = {};
+    const state = useGenerationStore.getState();
+    for (const key of ['inferenceSteps', 'guidanceScale', 'shift', 'inferMethod', 'useAdg',
+      'cfgIntervalStart', 'cfgIntervalEnd', 'batchSize', 'duration', 'audioFormat',
+      'thinking', 'lmTemperature', 'lmCfgScale', 'lmTopK', 'lmTopP', 'lmNegativePrompt',
+      'useCotMetas', 'useCotCaption', 'useCotLanguage', 'useConstrainedDecoding',
+      'allowLmBatch', 'lmBatchChunkSize', 'lmCodesStrength', 'captionRewrite',
+      'audioCoverStrength', 'useRandomSeed', 'autoScore', 'autoLrc', 'scoreScale'] as const) {
+      (gc as any)[key] = (state as any)[key];
+    }
+    const preset: ProjectPreset = {
+      name,
+      description: `${sc.configPath.replace('acestep-v15-', '')}, ${(gc.inferenceSteps ?? 8)} steps`,
+      serviceConfig: sc,
+      generationConfig: gc,
+    };
+    const existing = userPresets.filter((p) => p.name !== name);
+    const next = [...existing, preset];
+    setUserPresets(next);
+    saveProjectPresets(next);
+    setActivePreset(name);
+    setSaveName('');
+    setShowSaveInput(false);
+    ui.addToast(`Saved preset: ${name}`, 'success');
+  }, [configPath, device, flashAttn, offloadCpu, offloadDit, compileModel, quantization, lmModelPath, backend, userPresets, ui]);
+
+  const handleDeletePreset = useCallback((name: string) => {
+    const next = userPresets.filter((p) => p.name !== name);
+    setUserPresets(next);
+    saveProjectPresets(next);
+    if (activePreset === name) setActivePreset(null);
+  }, [userPresets, activePreset]);
+
   const ditInfo = store.modelInfo?.dit;
   const lmInfo = store.modelInfo?.lm;
 
@@ -360,6 +468,71 @@ export function ServiceConfig() {
 
   return (
     <div className="space-y-3">
+      {/* Project Presets */}
+      <div className="card space-y-2">
+        <h3 className="text-sm font-semibold">Project Presets</h3>
+        <div className="flex flex-wrap gap-1.5">
+          {allPresets.map((preset) => (
+            <div key={preset.name} className="flex items-center gap-0.5">
+              <button
+                className={`btn btn-sm ${activePreset === preset.name ? 'btn-primary' : 'btn-secondary'}`}
+                onClick={() => handleLoadPreset(preset)}
+                title={preset.description}
+              >
+                {preset.name}
+              </button>
+              {!preset.builtIn && (
+                <button
+                  className="text-[10px] px-1 py-0.5 rounded cursor-pointer"
+                  style={{ color: 'var(--text-tertiary)', backgroundColor: 'transparent', border: 'none' }}
+                  onClick={() => handleDeletePreset(preset.name)}
+                  title="Delete preset"
+                >
+                  x
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+        {showSaveInput ? (
+          <div className="flex gap-1.5 items-center">
+            <input
+              type="text"
+              className="flex-1 text-xs px-2 py-1 rounded"
+              style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}
+              placeholder="Preset name..."
+              value={saveName}
+              onChange={(e) => setSaveName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && saveName.trim()) handleSavePreset(saveName.trim());
+                if (e.key === 'Escape') { setShowSaveInput(false); setSaveName(''); }
+              }}
+              autoFocus
+            />
+            <button
+              className="btn btn-primary btn-sm"
+              onClick={() => { if (saveName.trim()) handleSavePreset(saveName.trim()); }}
+              disabled={!saveName.trim()}
+            >
+              Save
+            </button>
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={() => { setShowSaveInput(false); setSaveName(''); }}
+            >
+              Cancel
+            </button>
+          </div>
+        ) : (
+          <button
+            className="btn btn-secondary btn-sm text-xs"
+            onClick={() => setShowSaveInput(true)}
+          >
+            + Save Current Settings
+          </button>
+        )}
+      </div>
+
       {/* Header */}
       <div className="card space-y-3">
         <div className="flex items-center justify-between">

@@ -495,7 +495,10 @@ def generate_audio_core(
     cover_cfg_doubled = False  # Track CFG doubling of non-cover states (once only)
 
     # ── Diffusion loop ────────────────────────────────────────────────
-    with torch.inference_mode():
+    # NOTE: Tried inference_mode() here — speed was negligible vs no_grad,
+    # didn't measure VRAM. Keeping no_grad for future potential backprop
+    # (RLHF/RLVR training through diffusion loop).
+    with torch.no_grad():
         for step_idx in range(num_steps):
             t_curr = schedule[step_idx].item()
 
