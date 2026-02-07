@@ -70,6 +70,12 @@ class GenerateRequest(BaseModel):
     score_scale: float = 1.0
     lm_codes_strength: float = 1.0
 
+    # Latent resume (for resuming from a stored latent)
+    init_latent_id: Optional[str] = None
+    t_start: float = 1.0
+    checkpoint_step: Optional[int] = None
+    resume_sample_index: Optional[int] = None
+
 
 class TaskStatusResponse(BaseModel):
     task_id: str

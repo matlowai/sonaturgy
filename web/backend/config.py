@@ -10,4 +10,6 @@ PROJECT_ROOT = os.getenv(
 )
 TEMP_DIR = os.getenv("ACE_TEMP_DIR", os.path.join(PROJECT_ROOT, "web_tmp"))
 AUDIO_TTL_HOURS = int(os.getenv("ACE_AUDIO_TTL_HOURS", "24"))
+LATENT_DIR = os.getenv("ACE_LATENT_DIR", os.path.join(TEMP_DIR, "latents"))
+LATENT_TTL_HOURS = int(os.getenv("ACE_LATENT_TTL_HOURS", "24"))
 CORS_ORIGINS = os.getenv("ACE_CORS_ORIGINS", "http://localhost:3000").split(",")

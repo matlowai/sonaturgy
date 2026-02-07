@@ -31,6 +31,7 @@ export default function HomePage() {
             is_preview: s.is_preview,
           },
           codes: '',
+          latentId: s.latent_id || undefined,
         }));
         batch = {
           index: 0,
@@ -39,11 +40,15 @@ export default function HomePage() {
           taskId,
         };
       } else {
-        // Normal generation result
+        // Normal generation result — map snake_case latent_id to camelCase
+        const audios = (resultData.audios || []).map((a: any) => ({
+          ...a,
+          latentId: a.latent_id || undefined,
+        }));
         batch = {
           index: 0,
-          audios: resultData.audios || [],
-          params: resultData.audios?.[0]?.params || {},
+          audios,
+          params: audios[0]?.params || {},
           taskId,
           extra: resultData.extra || undefined,
         };

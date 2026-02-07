@@ -100,6 +100,9 @@ export interface AudioResult {
   sample_rate: number;
   params: Record<string, any>;
   codes: string;
+  latentId?: string;
+  latentCheckpointId?: string;
+  checkpointStep?: number;
 }
 
 export interface GenerationResult {
@@ -278,6 +281,7 @@ export interface PipelineStageConfig {
   // Audio source (for cover/repaint/extract/lego/complete — mutually exclusive)
   src_audio_id?: string;    // Uploaded audio UUID
   src_stage?: number;       // Previous stage index to use as source audio
+  src_latent_id?: string;   // Stored latent UUID from latent_store
 
   // Cover-specific
   audio_cover_strength?: number;  // 0-1
@@ -304,6 +308,7 @@ export interface PipelineStageConfig {
   cfg_interval_start: number;
   cfg_interval_end: number;
   timesteps?: number[];
+  checkpoint_step?: number;
   preview: boolean;
 }
 

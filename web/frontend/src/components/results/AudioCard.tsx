@@ -176,6 +176,15 @@ export function AudioCard({ audio, index, taskId, batchIndex }: AudioCardProps) 
             In playlist
           </span>
         )}
+        {audio.latentId && (
+          <span
+            className="text-xs px-1.5 py-0.5 rounded"
+            style={{ background: 'var(--accent)', color: 'var(--bg-primary)', opacity: 0.8 }}
+            title={`Latent stored: ${audio.latentId}`}
+          >
+            latent
+          </span>
+        )}
         <button className="btn btn-secondary btn-sm" onClick={handleRestoreParams}>
           {t(language, 'results.restore_btn')}
         </button>

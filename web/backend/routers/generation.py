@@ -21,6 +21,7 @@ from web.backend.schemas.generation import (
 from web.backend.schemas.pipeline import PipelineRequest
 from web.backend.services.task_manager import task_manager, TaskStatus
 from web.backend.services.audio_store import audio_store
+from web.backend.services.latent_store import latent_store
 from web.backend.services.pipeline_executor import run_pipeline
 
 from acestep.inference import (
@@ -120,10 +121,33 @@ def start_generation(
             progress=progress_cb,
         )
 
+        # Persist latents in latent_store
+        pred_latents = result.extra_outputs.get("pred_latents")
+        lm_metadata = result.extra_outputs.get("lm_metadata")
+        latent_ids = []
+        if pred_latents is not None:
+            model_variant = getattr(dit, "model_variant", "unknown")
+            for i in range(pred_latents.shape[0]):
+                lid = latent_store.store(
+                    tensor=pred_latents[i : i + 1],
+                    metadata={
+                        "model_variant": model_variant,
+                        "stage_type": req.task_type,
+                        "is_checkpoint": False,
+                        "checkpoint_step": None,
+                        "total_steps": req.inference_steps,
+                        "params": req.model_dump(),
+                        "lm_metadata": lm_metadata,
+                        "batch_size": 1,
+                    },
+                )
+                latent_ids.append(lid)
+
         # Register generated files in audio_store
         audio_data = []
-        for audio in result.audios:
+        for idx, audio in enumerate(result.audios):
             path = audio.get("path", "")
+            latent_id = latent_ids[idx] if idx < len(latent_ids) else None
             if path and os.path.exists(path):
                 entry = audio_store.store_file(path)
                 audio_data.append({
@@ -132,12 +156,14 @@ def start_generation(
                     "sample_rate": audio.get("sample_rate", 48000),
                     "params": audio.get("params", {}),
                     "codes": audio.get("params", {}).get("audio_codes", ""),
+                    "latent_id": latent_id,
                 })
             else:
                 audio_data.append({
                     "id": "",
                     "key": audio.get("key", ""),
                     "params": audio.get("params", {}),
+                    "latent_id": latent_id,
                 })
 
         # Serialize extra_outputs (remove non-serializable tensors)
@@ -396,8 +422,8 @@ def start_pipeline(
                 422, f"Stage {idx}: invalid type '{stage.type}'"
             )
 
-        # Refine must reference a previous stage (latent input)
-        if stage.type == "refine":
+        # Refine must reference a previous stage OR a stored latent
+        if stage.type == "refine" and not stage.src_latent_id:
             input_idx = (
                 stage.input_stage if stage.input_stage is not None else idx - 1
             )
@@ -408,13 +434,13 @@ def start_pipeline(
                     f"a previous stage (0..{idx - 1})",
                 )
 
-        # Audio-requiring stages need src_audio_id or src_stage
+        # Audio-requiring stages need src_audio_id, src_stage, or src_latent_id
         if stage.type in AUDIO_TYPES:
-            if not stage.src_audio_id and stage.src_stage is None:
+            if not stage.src_audio_id and stage.src_stage is None and not stage.src_latent_id:
                 raise HTTPException(
                     422,
                     f"Stage {idx} ({stage.type}): must provide "
-                    f"src_audio_id or src_stage",
+                    f"src_audio_id, src_stage, or src_latent_id",
                 )
             if stage.src_stage is not None:
                 if stage.src_stage < 0 or stage.src_stage >= idx:

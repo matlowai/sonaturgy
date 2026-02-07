@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from web.backend import config
 from web.backend.services.task_manager import task_manager
 from web.backend.services.audio_store import audio_store
+from web.backend.services.latent_store import latent_store
 from web.backend.routers import (
     service,
     generation,
@@ -26,9 +27,11 @@ from web.backend.routers import (
 async def lifespan(app: FastAPI):
     task_manager.set_event_loop(asyncio.get_running_loop())
     audio_store.start_cleanup()
+    latent_store.start_cleanup()
     yield
     task_manager.shutdown()
     audio_store.stop_cleanup()
+    latent_store.stop_cleanup()
 
 
 def create_app() -> FastAPI:
