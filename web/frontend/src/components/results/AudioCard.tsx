@@ -118,13 +118,39 @@ export function AudioCard({ audio, index, taskId, batchIndex }: AudioCardProps) 
     addToast('Sent to reference audio', 'success');
   };
 
+  const handleResumeCheckpoint = () => {
+    if (!audio.latentCheckpointId || audio.checkpointStep == null) {
+      addToast('No checkpoint available', 'info');
+      return;
+    }
+    const totalSteps = audio.params?.inference_steps || gen.inferenceSteps;
+    // Approximate tStart: schedule goes from ~1.0 to ~0.0, checkpoint at step K means
+    // roughly (1 - K/N) of the schedule remains. This is an approximation — user can fine-tune.
+    const approxTStart = Math.max(0.05, 1.0 - audio.checkpointStep / totalSteps);
+    gen.setFields({
+      ...(audio.params ? mapParamsToFields(audio.params) : {}),
+      initLatentId: audio.latentCheckpointId,
+      tStart: parseFloat(approxTStart.toFixed(2)),
+      checkpointStep: null,  // Don't re-checkpoint when resuming
+    });
+    addToast(`Resuming from checkpoint at step ${audio.checkpointStep} (denoise: ${approxTStart.toFixed(2)})`, 'success');
+  };
+
   const handleRestoreParams = () => {
     if (!audio.params) {
       addToast('No params to restore', 'info');
       return;
     }
-    gen.setFields(mapParamsToFields(audio.params));
-    addToast(`Parameters restored from Sample ${index + 1}`, 'success');
+    gen.setFields({
+      ...mapParamsToFields(audio.params),
+      initLatentId: audio.latentId || null,
+    });
+    addToast(
+      audio.latentId
+        ? `Params restored from Sample ${index + 1} (with latent)`
+        : `Params restored from Sample ${index + 1}`,
+      'success',
+    );
   };
 
   return (
@@ -185,9 +211,23 @@ export function AudioCard({ audio, index, taskId, batchIndex }: AudioCardProps) 
             latent
           </span>
         )}
+        {audio.latentCheckpointId && (
+          <span
+            className="text-xs px-1.5 py-0.5 rounded"
+            style={{ background: 'var(--success, #22c55e)', color: 'var(--bg-primary)', opacity: 0.8 }}
+            title={`Checkpoint at step ${audio.checkpointStep}: ${audio.latentCheckpointId}`}
+          >
+            ckpt@{audio.checkpointStep}
+          </span>
+        )}
         <button className="btn btn-secondary btn-sm" onClick={handleRestoreParams}>
           {t(language, 'results.restore_btn')}
         </button>
+        {audio.latentCheckpointId && (
+          <button className="btn btn-secondary btn-sm" onClick={handleResumeCheckpoint}>
+            Resume Ckpt
+          </button>
+        )}
         <button className="btn btn-secondary btn-sm" onClick={handleSendToSrc}>
           {t(language, 'results.send_to_src_btn')}
         </button>

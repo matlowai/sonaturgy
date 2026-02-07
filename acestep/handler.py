@@ -2288,6 +2288,7 @@ class AceStepHandler:
         timesteps: Optional[List[float]] = None,
         init_latents: Optional[torch.Tensor] = None,
         t_start: float = 1.0,
+        checkpoint_step: Optional[int] = None,
     ) -> Dict[str, Any]:
 
         """
@@ -2478,6 +2479,7 @@ class AceStepHandler:
             outputs = generate_audio_core(
                 self.model, variant=self.model_variant,
                 init_latents=init_latents, t_start=t_start,
+                checkpoint_step=checkpoint_step,
                 **generate_kwargs,
             )
             logger.info(f"[service_generate] generate_audio_core returned type={type(outputs)}")
@@ -2888,6 +2890,7 @@ class AceStepHandler:
         timesteps: Optional[List[float]] = None,
         init_latents: Optional[torch.Tensor] = None,
         t_start: float = 1.0,
+        checkpoint_step: Optional[int] = None,
         progress=None
     ) -> Dict[str, Any]:
         """
@@ -3041,6 +3044,7 @@ class AceStepHandler:
                 timesteps=timesteps,  # Pass custom timesteps if provided
                 init_latents=init_latents,
                 t_start=t_start,
+                checkpoint_step=checkpoint_step,
             )
             
             logger.info("[generate_music] Model generation completed. Decoding latents...")
@@ -3126,9 +3130,18 @@ class AceStepHandler:
             context_latents = outputs.get("context_latents")
             lyric_token_idss = outputs.get("lyric_token_idss")
             
+            # Extract checkpoint latent and schedule if present
+            checkpoint_latent = outputs.get("checkpoint_latent")
+            diffusion_schedule = outputs.get("schedule")
+            checkpoint_latent_cpu = checkpoint_latent.detach().cpu() if checkpoint_latent is not None else None
+            schedule_list = diffusion_schedule.tolist() if diffusion_schedule is not None else None
+
             # Move all tensors to CPU to save VRAM (detach to release computation graph)
             extra_outputs = {
                 "pred_latents": pred_latents_cpu,  # Already moved to CPU earlier to save VRAM during VAE decode
+                "checkpoint_latent": checkpoint_latent_cpu,
+                "checkpoint_step": checkpoint_step,
+                "schedule": schedule_list,
                 "target_latents": target_latents_input.detach().cpu() if target_latents_input is not None else None,
                 "src_latents": src_latents.detach().cpu() if src_latents is not None else None,
                 "chunk_masks": chunk_masks.detach().cpu() if chunk_masks is not None else None,

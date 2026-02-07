@@ -121,6 +121,7 @@ class GenerationParams:
     # Pipeline Builder: start from a pre-computed latent at a given timestep
     init_latents: Optional[Any] = None  # torch.Tensor, kept as Any to avoid import
     t_start: float = 1.0  # 1.0 = full denoise from noise, <1.0 = partial denoise
+    checkpoint_step: Optional[int] = None  # Snapshot xt at this diffusion step
 
     repainting_start: float = 0.0
     repainting_end: float = -1
@@ -587,6 +588,7 @@ def generate_music(
             timesteps=params.timesteps,
             init_latents=params.init_latents,
             t_start=params.t_start,
+            checkpoint_step=params.checkpoint_step,
             progress=progress,
         )
 

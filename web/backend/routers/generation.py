@@ -2,6 +2,7 @@
 
 import os
 
+import torch
 from fastapi import APIRouter, Depends, HTTPException
 
 from web.backend.dependencies import get_dit_handler, get_llm_handler
@@ -49,6 +50,56 @@ def start_generation(
     ref_audio = audio_store.get_path(req.reference_audio_id) if req.reference_audio_id else None
     src_audio = audio_store.get_path(req.src_audio_id) if req.src_audio_id else None
 
+    # Resolve stored latent for resume
+    init_latents_tensor = None
+    effective_t_start = req.t_start
+
+    if req.init_latent_id:
+        record = latent_store.get_record(req.init_latent_id)
+        if record is None:
+            raise HTTPException(404, f"Latent '{req.init_latent_id}' not found or expired")
+
+        # Validate model variant
+        current_variant = getattr(dit, "model_variant", "unknown")
+        if record.model_variant != "unknown" and record.model_variant != current_variant:
+            raise HTTPException(
+                422,
+                f"Latent model mismatch: generated with '{record.model_variant}', "
+                f"current model is '{current_variant}'"
+            )
+
+        # Validate resume_sample_index
+        sample_idx = req.resume_sample_index if req.resume_sample_index is not None else 0
+        if sample_idx >= record.batch_size:
+            raise HTTPException(
+                422,
+                f"Sample index {sample_idx} out of range (latent has {record.batch_size} items)"
+            )
+
+        # Load tensor
+        tensor = latent_store.get(req.init_latent_id)
+        if tensor is None:
+            raise HTTPException(404, f"Failed to load latent tensor '{req.init_latent_id}'")
+
+        # Select batch item if stored latent has multiple
+        if record.batch_size > 1:
+            tensor = tensor[sample_idx : sample_idx + 1]
+
+        # Expand to request batch_size
+        if req.batch_size > 1:
+            tensor = tensor.expand(req.batch_size, -1, -1).contiguous()
+
+        # Renoise for partial denoising (same pattern as pipeline_executor.py)
+        if effective_t_start < 1.0 - 1e-6:
+            with torch.inference_mode():
+                init_latents_tensor = dit.model.renoise(
+                    tensor.to(dit.device).to(dit.dtype), effective_t_start,
+                )
+        else:
+            # t_start >= 1.0 → generate from noise, ignore latent
+            init_latents_tensor = None
+            effective_t_start = 1.0
+
     # For text2music with LM codes, lm_codes_strength controls how many
     # denoising steps use LM-generated code conditioning (same mechanism as
     # audio_cover_strength for cover tasks).  Apply it here so the frontend's
@@ -93,6 +144,9 @@ def start_generation(
         use_cot_caption=req.use_cot_caption,
         use_cot_language=req.use_cot_language,
         use_constrained_decoding=req.use_constrained_decoding,
+        init_latents=init_latents_tensor,
+        t_start=effective_t_start,
+        checkpoint_step=req.checkpoint_step,
     )
 
     gen_config = GenerationConfig(
@@ -123,10 +177,15 @@ def start_generation(
 
         # Persist latents in latent_store
         pred_latents = result.extra_outputs.get("pred_latents")
+        checkpoint_latent = result.extra_outputs.get("checkpoint_latent")
+        checkpoint_step_val = result.extra_outputs.get("checkpoint_step")
+        schedule_list = result.extra_outputs.get("schedule")
         lm_metadata = result.extra_outputs.get("lm_metadata")
+        model_variant = getattr(dit, "model_variant", "unknown")
+        req_dump = req.model_dump()
+
         latent_ids = []
         if pred_latents is not None:
-            model_variant = getattr(dit, "model_variant", "unknown")
             for i in range(pred_latents.shape[0]):
                 lid = latent_store.store(
                     tensor=pred_latents[i : i + 1],
@@ -136,35 +195,55 @@ def start_generation(
                         "is_checkpoint": False,
                         "checkpoint_step": None,
                         "total_steps": req.inference_steps,
-                        "params": req.model_dump(),
+                        "params": req_dump,
                         "lm_metadata": lm_metadata,
                         "batch_size": 1,
+                        "schedule": schedule_list,
                     },
                 )
                 latent_ids.append(lid)
+
+        # Store checkpoint latent if captured
+        checkpoint_ids = []
+        if checkpoint_latent is not None and checkpoint_step_val is not None:
+            for i in range(checkpoint_latent.shape[0]):
+                cid = latent_store.store(
+                    tensor=checkpoint_latent[i : i + 1],
+                    metadata={
+                        "model_variant": model_variant,
+                        "stage_type": req.task_type,
+                        "is_checkpoint": True,
+                        "checkpoint_step": checkpoint_step_val,
+                        "total_steps": req.inference_steps,
+                        "params": req_dump,
+                        "lm_metadata": lm_metadata,
+                        "batch_size": 1,
+                        "schedule": schedule_list,
+                    },
+                )
+                checkpoint_ids.append(cid)
 
         # Register generated files in audio_store
         audio_data = []
         for idx, audio in enumerate(result.audios):
             path = audio.get("path", "")
             latent_id = latent_ids[idx] if idx < len(latent_ids) else None
+            ckpt_id = checkpoint_ids[idx] if idx < len(checkpoint_ids) else None
+            entry_dict = {
+                "key": audio.get("key", ""),
+                "params": audio.get("params", {}),
+                "latent_id": latent_id,
+                "latent_checkpoint_id": ckpt_id,
+                "checkpoint_step": checkpoint_step_val,
+            }
             if path and os.path.exists(path):
                 entry = audio_store.store_file(path)
-                audio_data.append({
-                    "id": entry.id,
-                    "key": audio.get("key", ""),
-                    "sample_rate": audio.get("sample_rate", 48000),
-                    "params": audio.get("params", {}),
-                    "codes": audio.get("params", {}).get("audio_codes", ""),
-                    "latent_id": latent_id,
-                })
+                entry_dict["id"] = entry.id
+                entry_dict["sample_rate"] = audio.get("sample_rate", 48000)
+                entry_dict["codes"] = audio.get("params", {}).get("audio_codes", "")
             else:
-                audio_data.append({
-                    "id": "",
-                    "key": audio.get("key", ""),
-                    "params": audio.get("params", {}),
-                    "latent_id": latent_id,
-                })
+                entry_dict["id"] = ""
+            audio_data.append(entry_dict)
 
         # Serialize extra_outputs (remove non-serializable tensors)
         extra = {}

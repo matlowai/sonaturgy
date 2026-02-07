@@ -40,6 +40,11 @@ export function mapParamsToFields(p: Record<string, any>): Record<string, any> {
     useCotCaption: p.use_cot_caption ?? true,
     useCotLanguage: p.use_cot_language ?? true,
     useConstrainedDecoding: p.use_constrained_decoding ?? true,
+    // Reset latent resume (these are set explicitly by AudioCard, not from params)
+    initLatentId: null,
+    tStart: 1.0,
+    checkpointStep: null,
+    resumeSampleIndex: null,
   };
 }
 

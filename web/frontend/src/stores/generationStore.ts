@@ -82,7 +82,14 @@ interface GenerationState {
   scoreScale: number;
   autoGen: boolean;
 
+  // Latent resume (ephemeral, not persisted in presets)
+  initLatentId: string | null;
+  tStart: number;
+  checkpointStep: number | null;
+  resumeSampleIndex: number | null;
+
   // Actions
+  clearLatentResume: () => void;
   setMode: (mode: GenerationMode) => void;
   setField: (field: string, value: any) => void;
   setFields: (fields: Record<string, any>) => void;
@@ -144,6 +151,10 @@ const defaults = {
   autoLrc: false,
   scoreScale: 1.0,
   autoGen: false,
+  initLatentId: null,
+  tStart: 1.0,
+  checkpointStep: null,
+  resumeSampleIndex: null,
 };
 
 // Merge saved settings into defaults (settings-only fields, not creative content)
@@ -174,6 +185,7 @@ export const useGenerationStore = create<GenerationState>((set, get) => ({
   setField: (field, value) => set({ [field]: value } as any),
   setFields: (fields) => set(fields as any),
   resetToDefaults: () => set(defaults),
+  clearLatentResume: () => set({ initLatentId: null, tStart: 1.0, checkpointStep: null, resumeSampleIndex: null }),
 }));
 
 // Subscribe to persist settings on every state change

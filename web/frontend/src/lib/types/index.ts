@@ -83,6 +83,11 @@ export interface GenerateRequest {
   auto_lrc: boolean;
   score_scale: number;
   lm_codes_strength: number;
+  // Latent resume
+  init_latent_id: string | null;
+  t_start: number;
+  checkpoint_step: number | null;
+  resume_sample_index: number | null;
 }
 
 export interface TaskStatus {

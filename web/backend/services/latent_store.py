@@ -37,6 +37,7 @@ class LatentRecord:
     params: dict  # Full generation params snapshot
     lm_metadata: Optional[dict]  # BPM, key, structure from LLM Phase 1
     batch_size: int
+    schedule: Optional[list] = None  # Timestep schedule used (for checkpoint resume)
     created_at: float = field(default_factory=time.time)
     pinned: bool = False
     pipeline_id: Optional[str] = None
@@ -78,6 +79,7 @@ class LatentStore:
             params=metadata.get("params", {}),
             lm_metadata=metadata.get("lm_metadata"),
             batch_size=metadata.get("batch_size", 1),
+            schedule=metadata.get("schedule"),
             pipeline_id=metadata.get("pipeline_id"),
             stage_index=metadata.get("stage_index"),
         )
@@ -136,6 +138,7 @@ class LatentStore:
                     params=meta.get("params", {}),
                     lm_metadata=meta.get("lm_metadata"),
                     batch_size=meta.get("batch_size", 1),
+                    schedule=meta.get("schedule"),
                     created_at=meta.get("created_at", 0.0),
                     pinned=meta.get("pinned", False),
                     pipeline_id=meta.get("pipeline_id"),

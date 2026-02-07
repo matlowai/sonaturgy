@@ -27,6 +27,42 @@ export function AdvancedSettings() {
 
       {open && (
         <div className="mt-3 space-y-4">
+          {/* Resume from Latent */}
+          {gen.initLatentId && (
+            <div className="border rounded-lg p-3 space-y-2" style={{ borderColor: 'var(--accent)', backgroundColor: 'rgba(59, 130, 246, 0.05)' }}>
+              <div className="flex items-center justify-between">
+                <h4 className="text-sm font-medium" style={{ color: 'var(--accent)' }}>
+                  Resuming from latent
+                </h4>
+                <button
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => gen.setFields({ initLatentId: null, tStart: 1.0 })}
+                >
+                  Clear
+                </button>
+              </div>
+              <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+                ID: <code className="text-xs">{gen.initLatentId}</code>
+              </p>
+              <div>
+                <label className="label">
+                  Denoise: {gen.tStart.toFixed(2)}
+                  <Tooltip text="How much of the schedule to run. 1.0 = full denoise (ignores latent). Lower values preserve more of the original." />
+                </label>
+                <input
+                  type="range" min={0} max={1} step={0.05}
+                  value={gen.tStart}
+                  onChange={(e) => gen.setField('tStart', parseFloat(e.target.value))}
+                />
+              </div>
+              {gen.tStart >= 1.0 && (
+                <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+                  At 1.0, generation starts from noise. Lower the slider to resume from the stored latent.
+                </p>
+              )}
+            </div>
+          )}
+
           {/* DiT Settings */}
           <div className="space-y-3">
             <h4 className="text-sm font-medium" style={{ color: 'var(--text-secondary)' }}>DiT Parameters</h4>
@@ -115,6 +151,22 @@ export function AdvancedSettings() {
                   onChange={(e) => gen.setField('customTimesteps', e.target.value)}
                   placeholder="0.97,0.76,0.615..."
                   className="w-full text-xs"
+                />
+              </div>
+
+              <div>
+                <label className="label">
+                  Checkpoint Step{gen.checkpointStep !== null ? `: ${gen.checkpointStep}` : ''}
+                  <Tooltip text="Snapshot the latent at this diffusion step for later resume. Leave empty for no checkpoint." />
+                </label>
+                <input
+                  type="number"
+                  value={gen.checkpointStep ?? ''}
+                  onChange={(e) => gen.setField('checkpointStep', e.target.value === '' ? null : Math.min(Math.max(0, parseInt(e.target.value) || 0), gen.inferenceSteps - 1))}
+                  placeholder="none"
+                  min={0}
+                  max={gen.inferenceSteps - 1}
+                  className="w-full"
                 />
               </div>
             </div>

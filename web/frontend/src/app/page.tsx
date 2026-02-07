@@ -40,10 +40,12 @@ export default function HomePage() {
           taskId,
         };
       } else {
-        // Normal generation result — map snake_case latent_id to camelCase
+        // Normal generation result — map snake_case to camelCase
         const audios = (resultData.audios || []).map((a: any) => ({
           ...a,
-          latentId: a.latent_id || undefined,
+          latentId: a.latent_id ?? undefined,
+          latentCheckpointId: a.latent_checkpoint_id ?? undefined,
+          checkpointStep: a.checkpoint_step ?? undefined,
         }));
         batch = {
           index: 0,

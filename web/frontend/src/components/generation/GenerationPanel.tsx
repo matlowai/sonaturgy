@@ -57,6 +57,14 @@ export function GenerationPanel() {
           {/* Advanced Settings */}
           <AdvancedSettings />
 
+          {/* Resume indicator */}
+          {gen.initLatentId && gen.tStart < 1.0 && (
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded text-xs" style={{ backgroundColor: 'rgba(59, 130, 246, 0.1)', color: 'var(--accent)' }}>
+              <span>Resuming from latent {gen.initLatentId.slice(0, 8)}... (denoise: {gen.tStart.toFixed(2)})</span>
+              <button className="underline hover:no-underline" onClick={() => gen.setFields({ initLatentId: null, tStart: 1.0 })}>Clear</button>
+            </div>
+          )}
+
           {/* Generate Button */}
           <div className="flex items-center gap-3">
             <button
