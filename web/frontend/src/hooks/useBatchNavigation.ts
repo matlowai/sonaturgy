@@ -4,6 +4,10 @@ import { useResultsStore } from '@/stores/resultsStore';
 import { useGenerationStore } from '@/stores/generationStore';
 import { useUIStore } from '@/stores/uiStore';
 
+import { mapParamsToFields } from '@/lib/stageConversion';
+// Re-export for backward compat — canonical source is stageConversion.ts
+export { mapParamsToFields };
+
 export function useBatchNavigation() {
   const results = useResultsStore();
   const gen = useGenerationStore();
@@ -32,21 +36,7 @@ export function useBatchNavigation() {
       return;
     }
     const p = batch.params;
-    gen.setFields({
-      caption: p.caption || '',
-      lyrics: p.lyrics || '',
-      instrumental: p.instrumental || false,
-      taskType: p.task_type || 'text2music',
-      vocalLanguage: p.vocal_language || 'unknown',
-      bpm: p.bpm ? String(p.bpm) : '',
-      keyscale: p.keyscale || '',
-      timesignature: p.timesignature || '',
-      duration: p.duration || -1,
-      inferenceSteps: p.inference_steps || 8,
-      guidanceScale: p.guidance_scale || 7.0,
-      seed: p.seed || -1,
-      shift: p.shift || 1.0,
-    });
+    gen.setFields(mapParamsToFields(p));
     ui.addToast(`Parameters restored from Batch ${results.currentBatchIndex + 1}`, 'success');
   }, [results, gen, ui]);
 

@@ -14,6 +14,7 @@ from acestep.constants import TASK_INSTRUCTIONS
 from web.backend.schemas.pipeline import PipelineRequest, PipelineStageConfig
 from web.backend.services.task_manager import task_manager
 from web.backend.services.audio_store import audio_store
+from web.backend.services.latent_store import latent_store
 from web.backend.services.audio_metadata import embed_metadata, build_pipeline_metadata
 
 # Stage types that need source audio
@@ -94,11 +95,12 @@ def run_pipeline(
 
     total_stages = len(req.stages)
     stage_latents: Dict[int, torch.Tensor] = {}  # idx -> clean latent (CPU)
+    stage_latent_ids: Dict[int, str] = {}  # idx -> latent_store UUID
     stage_time_costs: Dict[str, float] = {}
 
     # ── Validate stages ───────────────────────────────────────────────
     for idx, stage in enumerate(req.stages):
-        if stage.type == "refine":
+        if stage.type == "refine" and not stage.src_latent_id:
             if stage.input_stage is None:
                 stage.input_stage = idx - 1
             if stage.input_stage < 0 or stage.input_stage >= idx:
@@ -162,8 +164,9 @@ def run_pipeline(
         logger.info(f"[pipeline] Starting {stage_label}")
 
         # ── Per-stage conditioning (with fallback to shared) ──────────
-        stage_caption = stage.caption or req.caption
-        stage_lyrics = stage.lyrics or req.lyrics
+        # Use `is not None` check, not `or`, so "" means "explicitly empty"
+        stage_caption = stage.caption if stage.caption is not None else req.caption
+        stage_lyrics = stage.lyrics if stage.lyrics is not None else req.lyrics
         captions_batch = [stage_caption] * batch_size
         lyrics_batch = [stage_lyrics] * batch_size
 
@@ -178,7 +181,69 @@ def run_pipeline(
         repainting_start = None
         repainting_end = None
 
-        if stage.type == "refine" and stage.input_stage is not None:
+        # ── src_latent_id resolution (highest priority source) ────────
+        if stage.src_latent_id:
+            stored_latent = latent_store.get(stage.src_latent_id)
+            if stored_latent is None:
+                raise ValueError(
+                    f"Stage {idx}: src_latent_id='{stage.src_latent_id}' "
+                    f"not found or expired in latent store"
+                )
+
+            if stage.type == "refine":
+                # Fast path: use latent directly, no VAE decode
+                t_start = stage.denoise
+                if t_start < 1.0 - 1e-6:
+                    with torch.inference_mode():
+                        init_latents = dit_handler.model.renoise(
+                            stored_latent.to(dit_handler.device).to(dit_handler.dtype),
+                            t_start,
+                        )
+                else:
+                    init_latents = None
+                    t_start = 1.0
+                logger.info(
+                    f"[pipeline] Stage {idx}: refine from stored latent "
+                    f"{stage.src_latent_id} (fast path, t_start={t_start})"
+                )
+
+            elif stage.type in AUDIO_STAGE_TYPES:
+                # Audio-requiring stages: VAE decode stored latent to waveform
+                logger.info(
+                    f"[pipeline] Stage {idx}: VAE-decoding stored latent "
+                    f"{stage.src_latent_id} for {stage.type} stage"
+                )
+                with torch.inference_mode():
+                    with dit_handler._load_model_context("vae"):
+                        latents_gpu = (
+                            stored_latent.to(dit_handler.device)
+                            .transpose(1, 2)
+                            .contiguous()
+                            .to(dit_handler.vae.dtype)
+                        )
+                        pred_wavs = dit_handler.tiled_decode(latents_gpu)
+                        if pred_wavs.dtype != torch.float32:
+                            pred_wavs = pred_wavs.float()
+                        src_audio = pred_wavs[0].cpu()
+                        del latents_gpu, pred_wavs
+                        if torch.cuda.is_available():
+                            torch.cuda.empty_cache()
+
+                target_wavs = src_audio.unsqueeze(0).expand(batch_size, -1, -1)
+                instruction = build_stage_instruction(stage)
+                instructions = [instruction] * batch_size
+                if stage.type == "cover":
+                    audio_cover_strength = stage.audio_cover_strength
+                    refer_audios = [[src_audio] for _ in range(batch_size)]
+                    if stage.audio_code_hints:
+                        audio_code_hints = [stage.audio_code_hints] * batch_size
+                elif stage.type == "repaint":
+                    if stage.repainting_start is not None:
+                        repainting_start = [stage.repainting_start] * batch_size
+                    if stage.repainting_end is not None:
+                        repainting_end = [stage.repainting_end] * batch_size
+
+        elif stage.type == "refine" and stage.input_stage is not None:
             # Re-noise previous stage's clean latent
             clean_latents = stage_latents[stage.input_stage]
             t_start = stage.denoise
@@ -276,6 +341,58 @@ def run_pipeline(
 
         # Store clean latents (CPU) for later stages
         stage_latents[idx] = outputs["target_latents"].detach().cpu()
+
+        # Build params snapshot from shared conditioning + per-stage config
+        stage_params = {
+            # Conditioning
+            "caption": stage.caption or req.caption,
+            "lyrics": stage.lyrics or req.lyrics,
+            "instrumental": req.instrumental,
+            "vocal_language": req.vocal_language,
+            "bpm": req.bpm,
+            "keyscale": req.keyscale,
+            "timesignature": req.timesignature,
+            "duration": req.duration,
+            "instruction": build_stage_instruction(stage),
+            # Stage DiT params
+            "task_type": stage.type,
+            "inference_steps": stage.steps,
+            "guidance_scale": stage.guidance_scale,
+            "shift": stage.shift,
+            "seed": stage.seed,
+            "infer_method": stage.infer_method,
+            "use_adg": stage.use_adg,
+            "cfg_interval_start": stage.cfg_interval_start,
+            "cfg_interval_end": stage.cfg_interval_end,
+            "denoise": stage.denoise,
+            "audio_cover_strength": stage.audio_cover_strength,
+            # LM settings
+            "thinking": req.thinking,
+            "lm_temperature": req.lm_temperature,
+            "lm_cfg_scale": req.lm_cfg_scale,
+            "lm_top_k": req.lm_top_k,
+            "lm_top_p": req.lm_top_p,
+            "lm_negative_prompt": req.lm_negative_prompt,
+            "use_constrained_decoding": req.use_constrained_decoding,
+        }
+
+        # Persist in latent_store for cross-run resume
+        stage_latent_ids[idx] = latent_store.store(
+            tensor=stage_latents[idx],
+            metadata={
+                "model_variant": getattr(dit_handler, "model_variant", "unknown"),
+                "stage_type": stage.type,
+                "is_checkpoint": False,
+                "checkpoint_step": None,
+                "total_steps": stage.steps,
+                "params": stage_params,
+                "lm_metadata": None,
+                "batch_size": batch_size,
+                "pipeline_id": task_id,
+                "stage_index": idx,
+            },
+        )
+
         stage_time_costs[f"stage_{idx}"] = time.time() - stage_start
         logger.info(
             f"[pipeline] {stage_label} completed in "
@@ -355,6 +472,54 @@ def run_pipeline(
 
     stage_time_costs["vae_decode"] = time.time() - vae_start
     logger.info(f"[pipeline] VAE decode completed in {stage_time_costs['vae_decode']:.1f}s")
+
+    # ── Build per-stage params for Restore in UI ────────────────────
+    # Combine shared request-level fields with per-stage overrides
+    # so the frontend can restore params from any pipeline result.
+    shared_params = {
+        "caption": req.caption,
+        "lyrics": req.lyrics,
+        "instrumental": req.instrumental,
+        "vocal_language": req.vocal_language,
+        "bpm": req.bpm,
+        "keyscale": req.keyscale,
+        "timesignature": req.timesignature,
+        "duration": req.duration,
+        "thinking": req.thinking,
+        "lm_temperature": req.lm_temperature,
+        "lm_cfg_scale": req.lm_cfg_scale,
+        "lm_top_k": req.lm_top_k,
+        "lm_top_p": req.lm_top_p,
+        "lm_negative_prompt": req.lm_negative_prompt,
+        "use_cot_metas": req.use_cot_metas,
+        "use_cot_caption": req.use_cot_caption,
+        "use_cot_language": req.use_cot_language,
+        "use_constrained_decoding": req.use_constrained_decoding,
+    }
+
+    # Map stage index -> per-stage params dict
+    stage_params: Dict[int, Dict[str, Any]] = {}
+    for idx, stage in enumerate(req.stages):
+        stage_params[idx] = {
+            **shared_params,
+            "caption": stage.caption if stage.caption is not None else req.caption,
+            "lyrics": stage.lyrics if stage.lyrics is not None else req.lyrics,
+            "task_type": stage.type,
+            "inference_steps": stage.steps,
+            "guidance_scale": stage.guidance_scale,
+            "seed": stage.seed,
+            "shift": stage.shift,
+            "infer_method": stage.infer_method,
+            "use_adg": stage.use_adg,
+            "cfg_interval_start": stage.cfg_interval_start,
+            "cfg_interval_end": stage.cfg_interval_end,
+            "audio_cover_strength": stage.audio_cover_strength,
+        }
+
+    # Attach params + latent_id to each audio result
+    for ar in audio_results:
+        ar["params"] = stage_params.get(ar["stage"], shared_params)
+        ar["latent_id"] = stage_latent_ids.get(ar["stage"])
 
     return {
         "result": {

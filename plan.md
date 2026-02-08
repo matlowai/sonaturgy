@@ -25,6 +25,9 @@ rm -rf web/frontend/.next && cd web/frontend && npm run dev
 | File | What's in it |
 |------|-------------|
 | **`web/PLAN.md`** | Master reference: architecture, full file map, gotchas, API reference, pipeline design spec, Python API quick reference, GPU tiers |
+| **`web/PIPELINE_FRAMEWORK.md`** | Deep dive: instruction routing, conditioning pathways, VQ bottleneck, temporal switch, pipeline patterns, quality detection, RLVR, agent orchestration, file/function reference with line numbers |
+| **`web/UNIFIED_STAGE_DESIGN.md`** | Unified stage architecture vision: motivation, workflow diagrams, StageParams type, latent persistence design, cross-mode flow, open research questions |
+| **`web/UNIFIED_STAGE_EXECUTION_SPEC.md`** | Implementation spec (v2): code anchors, data contracts, latent store design (safetensors flat files), execution phases 1-5, replay compatibility rules, work packages |
 | **`web/HANDOFF.md`** | Original architecture decisions, file inventory with line counts, design decisions (task queue, tensor storage, audio lifecycle) |
 | **This file** | Feature summary, what's done/in-progress/todo, implementation notes |
 
@@ -86,6 +89,7 @@ ResizeObserver was saving bogus heights from layout reflows. Fixed to only track
 | `acestep/diffusion_core.py` | **NEW.** Unified diffusion loop replacing 6 model files' `generate_audio()` |
 | `acestep/handler.py` | Imports `generate_audio_core`, model swapping, `init_latents`/`t_start` passthrough |
 | `acestep/inference.py` | Added `init_latents`/`t_start` to `GenerationParams` |
+| `acestep/llm_inference.py` | Initialized `cot_output_text`, exposed `thinking_text` in `extra_outputs` for `dit` mode return |
 | `acestep/audio_utils.py` | Metadata embedding in `AudioSaver.save_audio()` |
 
 ---
@@ -222,68 +226,8 @@ The UI toggle works correctly end-to-end, but `flash_attn` package must be insta
 
 ### Project Presets — Persist & Recall Full Configurations ✅ IMPLEMENTED
 
-> **Status:** Fully implemented in feature/project-presets branch. See item 9 above.
-
-**Problem:** Every time the user opens the app, they re-select DiT model, LLM model, flash
-attention, offload settings, and advanced params (guidance scale, shift, CFG, etc.). Power
-users switching between workflows (fast drafting vs quality production vs cover sessions)
-have to manually reconfigure everything.
-
-**Scope:** A "Project Preset" captures the full configuration state:
-
-**Layer 1 — Service Config (left pane, `ServiceConfig.tsx`)**
-Currently `useState` (ephemeral). Should persist + recall:
-```
-configPath         "acestep-v15-turbo"       DiT model
-lmModelPath        "acestep-5Hz-lm-1.7B"     LLM model
-device             "auto"                     Device
-flashAttn          false                      Flash attention
-offloadCpu         false                      CPU offload
-offloadDit         false                      DiT-only offload
-compileModel       false                      torch.compile
-quantization       false                      int8 quantization
-backend            "vllm"                     LLM backend
-```
-
-**Layer 2 — Generation Defaults (`generationStore.ts`)**
-Already in Zustand but not persisted. Key fields to capture:
-```
-inferenceSteps     8            shift              1.0
-guidanceScale      7.0          inferMethod        "ode"
-thinking           true         lmTemperature      0.85
-lmCfgScale         2.0          useCotMetas        true
-audioCoverStrength 1.0          batchSize          2
-cfgIntervalStart   0.0          cfgIntervalEnd     1.0
-```
-
-**Layer 3 — Pipeline Defaults (`pipelineStore.ts`)**
-Already has user presets. Could optionally be bundled into project presets.
-
-**Implementation approach:**
-
-1. **Auto-save "last used"** — `localStorage` key `project-last-config`. On app load,
-   `ServiceConfig.tsx` reads this and initializes `useState` from it. Generation store
-   gets a `loadFromStorage()` action. This alone solves 80% of the annoyance.
-
-2. **Named presets** — `localStorage` key `project-presets`. Same pattern as pipeline presets:
-   `savePreset(name)` captures Layer 1 + Layer 2, `loadPreset(name)` restores both.
-
-3. **Built-in presets (ship 3-4):**
-   - **Fast Draft** — Turbo, no LLM, 8 steps, batch 4, shift 3
-   - **Quality** — Base, 1.7B LLM, 50 steps, batch 1, thinking on, shift 2
-   - **SFT + CFG** — SFT, 1.7B LLM, 50 steps, guidance 3-5, CFG interval 0.15-0.85
-   - **Cover Session** — Turbo, no LLM, cover_strength 0.5, 8 steps
-
-4. **UI:** Preset selector dropdown at top of sidebar (above DiT card), with save/delete.
-   Loading a preset both restores settings AND optionally auto-initializes the selected
-   models (with confirmation toast: "Load Base + 1.7B LLM?").
-
-**Key files:** `ServiceConfig.tsx` (migrate `useState` → persist), `generationStore.ts`
-(add `persist` middleware or manual load/save), new `projectPresetStore.ts` or extend
-existing stores.
-
-**Effort:** Medium. The "auto-save last used" is small (~30 lines). Named presets with
-UI is a proper feature.
+> See item 9 above for full details. Auto-save last used + 4 built-in + user CRUD.
+> Files: `presets.ts`, `ServiceConfig.tsx`, `generationStore.ts`.
 
 ### Future Ideas
 - [x] **DAW-style audio source viewer** ✅ — `AudioSourceViewer.tsx`: WaveSurfer.js waveform with scroll-wheel zoom, transport controls (⏮⏪◀▶⏸), progress bar, time display. Repaint: draggable red region overlay for visual mask selection. Phase C (minimap, beat grid, snap) still TODO

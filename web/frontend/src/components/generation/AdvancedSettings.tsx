@@ -1,19 +1,61 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useGenerationStore } from '@/stores/generationStore';
 import { useServiceStore } from '@/stores/serviceStore';
 import { useUIStore } from '@/stores/uiStore';
+import { usePlayerStore } from '@/stores/playerStore';
+import { useLatentBrowserStore } from '@/stores/latentBrowserStore';
 import { t } from '@/lib/i18n';
 import { AUDIO_FORMATS, INFER_METHODS } from '@/lib/constants';
 import { Tooltip } from '@/components/common/Tooltip';
 import * as help from '@/lib/help-text';
+import * as api from '@/lib/api';
 
 export function AdvancedSettings() {
   const gen = useGenerationStore();
   const { status } = useServiceStore();
-  const { language } = useUIStore();
+  const { language, addToast } = useUIStore();
   const [open, setOpen] = useState(false);
+  const [latentMeta, setLatentMeta] = useState<any>(null);
+  const [decodingLatent, setDecodingLatent] = useState(false);
+
+  // Auto-open when resuming from latent
+  useEffect(() => {
+    if (gen.initLatentId) setOpen(true);
+  }, [gen.initLatentId]);
+
+  // Fetch latent metadata when initLatentId changes
+  useEffect(() => {
+    if (gen.initLatentId) {
+      api.getLatentMetadata(gen.initLatentId)
+        .then((resp) => resp.success ? setLatentMeta(resp.data) : setLatentMeta(null))
+        .catch(() => setLatentMeta(null));
+    } else {
+      setLatentMeta(null);
+    }
+  }, [gen.initLatentId]);
+
+  const handlePreviewLatent = async () => {
+    if (!gen.initLatentId) return;
+    setDecodingLatent(true);
+    try {
+      const resp = await api.decodeLatent(gen.initLatentId);
+      if (resp.success) {
+        const audioUrl = api.getAudioUrl(resp.data.audio_id);
+        usePlayerStore.getState().playTrack({
+          id: resp.data.audio_id,
+          url: audioUrl,
+          title: `Latent Preview: ${gen.initLatentId.slice(0, 8)}`,
+        });
+        addToast('Playing latent preview', 'success');
+      }
+    } catch (e: any) {
+      addToast(e.message, 'error');
+    } finally {
+      setDecodingLatent(false);
+    }
+  };
 
   const isTurbo = status.is_turbo;
   const isBase = status.is_turbo === false;
@@ -27,6 +69,75 @@ export function AdvancedSettings() {
 
       {open && (
         <div className="mt-3 space-y-4">
+          {/* Browse / Resume from Latent */}
+          <button
+            className="btn btn-secondary btn-sm"
+            onClick={() => useLatentBrowserStore.getState().open()}
+          >
+            Browse Latents
+          </button>
+
+          {gen.initLatentId && (
+            <div className="border rounded-lg p-3 space-y-2" style={{ borderColor: 'var(--accent)', backgroundColor: 'rgba(59, 130, 246, 0.05)' }}>
+              <div className="flex items-center justify-between">
+                <h4 className="text-sm font-medium" style={{ color: 'var(--accent)' }}>
+                  Resuming from latent
+                </h4>
+                <div className="flex items-center gap-2">
+                  <button
+                    className="btn btn-secondary btn-sm"
+                    onClick={handlePreviewLatent}
+                    disabled={decodingLatent}
+                  >
+                    {decodingLatent ? 'Decoding...' : '\u25B6 Preview'}
+                  </button>
+                  <button
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => gen.setFields({ initLatentId: null, tStart: 1.0 })}
+                  >
+                    Clear
+                  </button>
+                </div>
+              </div>
+
+              {/* Latent metadata */}
+              {latentMeta ? (
+                <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs" style={{ color: 'var(--text-secondary)' }}>
+                  <span>Model: <strong style={{ color: 'var(--text-primary)' }}>{latentMeta.model_variant}</strong></span>
+                  <span>Type: <strong style={{ color: 'var(--text-primary)' }}>{latentMeta.stage_type}{latentMeta.is_checkpoint ? ' (ckpt)' : ''}</strong></span>
+                  <span>Shape: <code className="text-xs">{JSON.stringify(latentMeta.shape)}</code></span>
+                  <span>Created: {new Date(latentMeta.created_at * 1000).toLocaleString()}</span>
+                  {latentMeta.params?.caption && (
+                    <span className="col-span-2 truncate" title={latentMeta.params.caption}>
+                      Caption: {latentMeta.params.caption.slice(0, 80)}{latentMeta.params.caption.length > 80 ? '...' : ''}
+                    </span>
+                  )}
+                </div>
+              ) : (
+                <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+                  ID: <code className="text-xs">{gen.initLatentId}</code>
+                </p>
+              )}
+
+              <div>
+                <label className="label">
+                  Denoise: {gen.tStart.toFixed(2)}
+                  <Tooltip text="How much of the schedule to run. 1.0 = full denoise (ignores latent). Lower values preserve more of the original." />
+                </label>
+                <input
+                  type="range" min={0} max={1} step={0.05}
+                  value={gen.tStart}
+                  onChange={(e) => gen.setField('tStart', parseFloat(e.target.value))}
+                />
+              </div>
+              {gen.tStart >= 1.0 && (
+                <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+                  At 1.0, generation starts from noise. Lower the slider to resume from the stored latent.
+                </p>
+              )}
+            </div>
+          )}
+
           {/* DiT Settings */}
           <div className="space-y-3">
             <h4 className="text-sm font-medium" style={{ color: 'var(--text-secondary)' }}>DiT Parameters</h4>
@@ -115,6 +226,22 @@ export function AdvancedSettings() {
                   onChange={(e) => gen.setField('customTimesteps', e.target.value)}
                   placeholder="0.97,0.76,0.615..."
                   className="w-full text-xs"
+                />
+              </div>
+
+              <div>
+                <label className="label">
+                  Checkpoint Step{gen.checkpointStep !== null ? `: ${gen.checkpointStep}` : ''}
+                  <Tooltip text="Snapshot the latent at this diffusion step for later resume. Leave empty for no checkpoint." />
+                </label>
+                <input
+                  type="number"
+                  value={gen.checkpointStep ?? ''}
+                  onChange={(e) => gen.setField('checkpointStep', e.target.value === '' ? null : Math.min(Math.max(0, parseInt(e.target.value) || 0), gen.inferenceSteps - 1))}
+                  placeholder="none"
+                  min={0}
+                  max={gen.inferenceSteps - 1}
+                  className="w-full"
                 />
               </div>
             </div>

@@ -334,6 +334,8 @@ def generate_audio_core(
     # Pipeline Builder params (Phase 1)
     init_latents: Optional[torch.Tensor] = None,
     t_start: float = 1.0,
+    # Step checkpointing (Phase 4)
+    checkpoint_step: Optional[int] = None,
     **kwargs,
 ) -> Dict[str, Any]:
     """Unified diffusion loop replacing per-model generate_audio() methods.
@@ -498,9 +500,14 @@ def generate_audio_core(
     # NOTE: Tried inference_mode() here — speed was negligible vs no_grad,
     # didn't measure VRAM. Keeping no_grad for future potential backprop
     # (RLHF/RLVR training through diffusion loop).
+    checkpoint_latent = None
     with torch.no_grad():
         for step_idx in range(num_steps):
             t_curr = schedule[step_idx].item()
+
+            # Checkpoint: snapshot xt at the requested step
+            if checkpoint_step is not None and step_idx == checkpoint_step:
+                checkpoint_latent = xt.detach().clone()
 
             # Cover condition switch: reassign + reset KV every iteration
             # after cover_steps (matches original per-step reset behavior).
@@ -622,4 +629,6 @@ def generate_audio_core(
     return {
         "target_latents": x_gen,
         "time_costs": time_costs,
+        "checkpoint_latent": checkpoint_latent,
+        "schedule": schedule,
     }

@@ -186,6 +186,8 @@
     "title": "🎵 Results",
     "generated_music": "🎵 Generated Music (Sample {n})",
     "send_to_src_btn": "🔗 Send To Src Audio",
+    "send_to_ref_btn": "🔗 Send To Ref Audio",
+    "restore_btn": "↙️ Restore",
     "save_btn": "💾 Save",
     "score_btn": "📊 Score",
     "lrc_btn": "🎵 LRC",

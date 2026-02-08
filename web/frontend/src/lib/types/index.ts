@@ -83,6 +83,11 @@ export interface GenerateRequest {
   auto_lrc: boolean;
   score_scale: number;
   lm_codes_strength: number;
+  // Latent resume
+  init_latent_id: string | null;
+  t_start: number;
+  checkpoint_step: number | null;
+  resume_sample_index: number | null;
 }
 
 export interface TaskStatus {
@@ -100,6 +105,9 @@ export interface AudioResult {
   sample_rate: number;
   params: Record<string, any>;
   codes: string;
+  latentId?: string;
+  latentCheckpointId?: string;
+  checkpointStep?: number;
 }
 
 export interface GenerationResult {
@@ -262,12 +270,29 @@ export interface WSMessage {
   message?: string;
   result?: GenerationResult;
   error?: string;
+  error_detail?: string;  // Full traceback when verbose errors enabled
 }
 
 // Pipeline Builder
 export type PipelineStageType = 'generate' | 'refine' | 'cover' | 'repaint' | 'extract' | 'lego' | 'complete';
 
-export interface PipelineStageConfig {
+/** Canonical DiT diffusion parameters, shared between Custom and Pipeline modes. */
+export interface StageParams {
+  steps: number;
+  shift: number;
+  seed: number;
+  infer_method: string;
+  guidance_scale: number;
+  use_adg: boolean;
+  cfg_interval_start: number;
+  cfg_interval_end: number;
+  denoise: number;
+  timesteps?: number[];
+  checkpoint_step?: number;
+  audio_cover_strength?: number;
+}
+
+export interface PipelineStageConfig extends StageParams {
   type: PipelineStageType;
   input_stage?: number;  // For refine: source latent stage index
 
@@ -278,9 +303,9 @@ export interface PipelineStageConfig {
   // Audio source (for cover/repaint/extract/lego/complete — mutually exclusive)
   src_audio_id?: string;    // Uploaded audio UUID
   src_stage?: number;       // Previous stage index to use as source audio
+  src_latent_id?: string;   // Stored latent UUID from latent_store
 
   // Cover-specific
-  audio_cover_strength?: number;  // 0-1
   audio_code_hints?: string;
 
   // Repaint-specific
@@ -291,19 +316,9 @@ export interface PipelineStageConfig {
   track_name?: string;
   complete_track_classes?: string[];
 
-  // Common diffusion params
+  // Stage-only params
   model?: string;
-  steps: number;
-  shift: number;
-  denoise: number;
-  seed: number;
-  infer_method: string;
   scheduler?: string;
-  guidance_scale: number;
-  use_adg: boolean;
-  cfg_interval_start: number;
-  cfg_interval_end: number;
-  timesteps?: number[];
   preview: boolean;
 }
 
@@ -320,6 +335,19 @@ export interface PipelineRequest {
   keep_in_vram?: boolean;  // Keep all models loaded (requires more VRAM)
   audio_format?: string;   // flac, wav, mp3
   mp3_bitrate?: number;    // 128, 192, 256, 320
+
+  // LM settings (shared across all stages)
+  thinking?: boolean;
+  lm_temperature?: number;
+  lm_cfg_scale?: number;
+  lm_top_k?: number;
+  lm_top_p?: number;
+  lm_negative_prompt?: string;
+  use_cot_metas?: boolean;
+  use_cot_caption?: boolean;
+  use_cot_language?: boolean;
+  use_constrained_decoding?: boolean;
+
   stages: PipelineStageConfig[];
 }
 
@@ -336,6 +364,34 @@ export interface PipelineResult {
   final_stage: number;
   time_costs: Record<string, number>;
   success: boolean;
+}
+
+// Latent Browser
+export interface LatentRecord {
+  id: string;
+  shape: number[];
+  dtype: string;
+  model_variant: string;
+  stage_type: string;
+  is_checkpoint: boolean;
+  checkpoint_step: number | null;
+  total_steps: number;
+  batch_size: number;
+  created_at: number;
+  pinned: boolean;
+  pipeline_id?: string;
+  stage_index?: number;
+  params: Record<string, any>;
+  lm_metadata?: Record<string, any> | null;
+  // Derived fields from backend
+  caption: string;
+  duration?: number;
+  task_type: string;
+}
+
+export interface LatentListResponse {
+  latents: LatentRecord[];
+  total: number;
 }
 
 // Batch management

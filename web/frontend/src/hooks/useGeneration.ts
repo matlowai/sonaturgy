@@ -66,6 +66,10 @@ export function useGeneration() {
       auto_lrc: gen.autoLrc,
       score_scale: gen.scoreScale,
       lm_codes_strength: gen.lmCodesStrength,
+      init_latent_id: gen.initLatentId,
+      t_start: gen.tStart,
+      checkpoint_step: gen.checkpointStep,
+      resume_sample_index: gen.resumeSampleIndex,
     };
   }, [gen]);
 

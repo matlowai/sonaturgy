@@ -2,8 +2,10 @@
 
 import { useGenerationStore } from '@/stores/generationStore';
 import { useUIStore } from '@/stores/uiStore';
+import { usePipelineStore } from '@/stores/pipelineStore';
 import { useGeneration } from '@/hooks/useGeneration';
 import { useResultsStore } from '@/stores/resultsStore';
+import { customToStage } from '@/lib/stageConversion';
 import { t } from '@/lib/i18n';
 import { SimpleMode } from './SimpleMode';
 import { CustomMode } from './CustomMode';
@@ -19,7 +21,8 @@ const MODES = [
 
 export function GenerationPanel() {
   const { mode, setMode, autoGen } = useGenerationStore();
-  const { language } = useUIStore();
+  const { language, addToast } = useUIStore();
+  const pipe = usePipelineStore();
   const { generate } = useGeneration();
   const { generating } = useResultsStore();
   const gen = useGenerationStore();
@@ -27,6 +30,31 @@ export function GenerationPanel() {
   const handleGenerate = async () => {
     const taskId = await generate();
     // WebSocket will handle the rest via the main page
+  };
+
+  const handleAddToPipeline = () => {
+    const stage = customToStage(gen);
+    // Populate empty pipeline conditioning from custom state
+    pipe.setFieldsIfEmpty({
+      caption: gen.caption,
+      lyrics: gen.lyrics,
+      instrumental: gen.instrumental,
+      vocalLanguage: gen.vocalLanguage,
+      bpm: gen.bpm,
+      keyscale: gen.keyscale,
+      timesignature: gen.timesignature,
+      duration: gen.duration,
+    });
+    // If pipeline caption matches custom, clear stage-level override
+    if (stage.caption && stage.caption === pipe.caption) {
+      stage.caption = undefined;
+    }
+    if (stage.lyrics && stage.lyrics === pipe.lyrics) {
+      stage.lyrics = undefined;
+    }
+    pipe.addStageFromConfig(stage);
+    gen.setMode('pipeline');
+    addToast('Added as pipeline stage', 'success');
   };
 
   return (
@@ -57,6 +85,14 @@ export function GenerationPanel() {
           {/* Advanced Settings */}
           <AdvancedSettings />
 
+          {/* Resume indicator */}
+          {gen.initLatentId && gen.tStart < 1.0 && (
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded text-xs" style={{ backgroundColor: 'rgba(59, 130, 246, 0.1)', color: 'var(--accent)' }}>
+              <span>Resuming from latent {gen.initLatentId.slice(0, 8)}... (denoise: {gen.tStart.toFixed(2)})</span>
+              <button className="underline hover:no-underline" onClick={() => gen.setFields({ initLatentId: null, tStart: 1.0 })}>Clear</button>
+            </div>
+          )}
+
           {/* Generate Button */}
           <div className="flex items-center gap-3">
             <button
@@ -67,6 +103,17 @@ export function GenerationPanel() {
               {generating && <Spinner size="sm" />}
               {generating ? 'Generating...' : t(language, 'generation.generate_btn')}
             </button>
+
+            {mode === 'custom' && (
+              <button
+                className="btn text-sm px-4 py-3"
+                style={{ border: '1px solid var(--border)', color: 'var(--text-secondary)' }}
+                onClick={handleAddToPipeline}
+                title="Add current settings as a pipeline stage"
+              >
+                + Pipeline
+              </button>
+            )}
 
             <div className="flex items-center gap-2">
               <input

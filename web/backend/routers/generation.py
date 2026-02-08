@@ -1,8 +1,13 @@
 """Generation router: generate music, create-sample, format, understand."""
 
 import os
+import tempfile
+from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+import soundfile as sf
+import torch
+from fastapi import APIRouter, Depends, HTTPException, Query
+from loguru import logger
 
 from web.backend.dependencies import get_dit_handler, get_llm_handler
 from web.backend.schemas.common import ApiResponse
@@ -21,6 +26,7 @@ from web.backend.schemas.generation import (
 from web.backend.schemas.pipeline import PipelineRequest
 from web.backend.services.task_manager import task_manager, TaskStatus
 from web.backend.services.audio_store import audio_store
+from web.backend.services.latent_store import latent_store
 from web.backend.services.pipeline_executor import run_pipeline
 
 from acestep.inference import (
@@ -47,6 +53,68 @@ def start_generation(
     # Resolve uploaded audio IDs to paths
     ref_audio = audio_store.get_path(req.reference_audio_id) if req.reference_audio_id else None
     src_audio = audio_store.get_path(req.src_audio_id) if req.src_audio_id else None
+
+    # Resolve stored latent for resume
+    init_latents_tensor = None
+    effective_t_start = req.t_start
+
+    if req.init_latent_id:
+        record = latent_store.get_record(req.init_latent_id)
+        if record is None:
+            raise HTTPException(404, f"Latent '{req.init_latent_id}' not found or expired")
+
+        # Validate model variant
+        current_variant = getattr(dit, "model_variant", "unknown")
+        if record.model_variant != "unknown" and record.model_variant != current_variant:
+            raise HTTPException(
+                422,
+                f"Latent model mismatch: generated with '{record.model_variant}', "
+                f"current model is '{current_variant}'"
+            )
+
+        # Validate resume_sample_index
+        sample_idx = req.resume_sample_index if req.resume_sample_index is not None else 0
+        if sample_idx >= record.batch_size:
+            raise HTTPException(
+                422,
+                f"Sample index {sample_idx} out of range (latent has {record.batch_size} items)"
+            )
+
+        # Load tensor
+        tensor = latent_store.get(req.init_latent_id)
+        if tensor is None:
+            raise HTTPException(404, f"Failed to load latent tensor '{req.init_latent_id}'")
+
+        # Select batch item if stored latent has multiple
+        if record.batch_size > 1:
+            tensor = tensor[sample_idx : sample_idx + 1]
+
+        # Expand to request batch_size
+        if req.batch_size > 1:
+            tensor = tensor.expand(req.batch_size, -1, -1).contiguous()
+
+        # Force duration to match stored latent — the latent's time dimension
+        # is fixed and must match context_latents prepared by the model.
+        # Derive from tensor shape: latent is [B, T, D] at 25Hz.
+        latent_time_dim = tensor.shape[1]
+        latent_duration = latent_time_dim / 25.0
+        if req.duration <= 0 or abs(req.duration - latent_duration) > 0.5:
+            logger.info(
+                f"[resume] Overriding duration {req.duration} → {latent_duration:.1f}s "
+                f"(from latent shape T={latent_time_dim})"
+            )
+            req.duration = latent_duration
+
+        # Renoise for partial denoising (same pattern as pipeline_executor.py)
+        if effective_t_start < 1.0 - 1e-6:
+            with torch.inference_mode():
+                init_latents_tensor = dit.model.renoise(
+                    tensor.to(dit.device).to(dit.dtype), effective_t_start,
+                )
+        else:
+            # t_start >= 1.0 → generate from noise, ignore latent
+            init_latents_tensor = None
+            effective_t_start = 1.0
 
     # For text2music with LM codes, lm_codes_strength controls how many
     # denoising steps use LM-generated code conditioning (same mechanism as
@@ -92,6 +160,9 @@ def start_generation(
         use_cot_caption=req.use_cot_caption,
         use_cot_language=req.use_cot_language,
         use_constrained_decoding=req.use_constrained_decoding,
+        init_latents=init_latents_tensor,
+        t_start=effective_t_start,
+        checkpoint_step=req.checkpoint_step,
     )
 
     gen_config = GenerationConfig(
@@ -120,25 +191,75 @@ def start_generation(
             progress=progress_cb,
         )
 
+        # Persist latents in latent_store
+        pred_latents = result.extra_outputs.get("pred_latents")
+        checkpoint_latent = result.extra_outputs.get("checkpoint_latent")
+        checkpoint_step_val = result.extra_outputs.get("checkpoint_step")
+        schedule_list = result.extra_outputs.get("schedule")
+        lm_metadata = result.extra_outputs.get("lm_metadata")
+        model_variant = getattr(dit, "model_variant", "unknown")
+        req_dump = req.model_dump()
+
+        latent_ids = []
+        if pred_latents is not None:
+            for i in range(pred_latents.shape[0]):
+                lid = latent_store.store(
+                    tensor=pred_latents[i : i + 1],
+                    metadata={
+                        "model_variant": model_variant,
+                        "stage_type": req.task_type,
+                        "is_checkpoint": False,
+                        "checkpoint_step": None,
+                        "total_steps": req.inference_steps,
+                        "params": req_dump,
+                        "lm_metadata": lm_metadata,
+                        "batch_size": 1,
+                        "schedule": schedule_list,
+                    },
+                )
+                latent_ids.append(lid)
+
+        # Store checkpoint latent if captured
+        checkpoint_ids = []
+        if checkpoint_latent is not None and checkpoint_step_val is not None:
+            for i in range(checkpoint_latent.shape[0]):
+                cid = latent_store.store(
+                    tensor=checkpoint_latent[i : i + 1],
+                    metadata={
+                        "model_variant": model_variant,
+                        "stage_type": req.task_type,
+                        "is_checkpoint": True,
+                        "checkpoint_step": checkpoint_step_val,
+                        "total_steps": req.inference_steps,
+                        "params": req_dump,
+                        "lm_metadata": lm_metadata,
+                        "batch_size": 1,
+                        "schedule": schedule_list,
+                    },
+                )
+                checkpoint_ids.append(cid)
+
         # Register generated files in audio_store
         audio_data = []
-        for audio in result.audios:
+        for idx, audio in enumerate(result.audios):
             path = audio.get("path", "")
+            latent_id = latent_ids[idx] if idx < len(latent_ids) else None
+            ckpt_id = checkpoint_ids[idx] if idx < len(checkpoint_ids) else None
+            entry_dict = {
+                "key": audio.get("key", ""),
+                "params": audio.get("params", {}),
+                "latent_id": latent_id,
+                "latent_checkpoint_id": ckpt_id,
+                "checkpoint_step": checkpoint_step_val,
+            }
             if path and os.path.exists(path):
                 entry = audio_store.store_file(path)
-                audio_data.append({
-                    "id": entry.id,
-                    "key": audio.get("key", ""),
-                    "sample_rate": audio.get("sample_rate", 48000),
-                    "params": audio.get("params", {}),
-                    "codes": audio.get("params", {}).get("audio_codes", ""),
-                })
+                entry_dict["id"] = entry.id
+                entry_dict["sample_rate"] = audio.get("sample_rate", 48000)
+                entry_dict["codes"] = audio.get("params", {}).get("audio_codes", "")
             else:
-                audio_data.append({
-                    "id": "",
-                    "key": audio.get("key", ""),
-                    "params": audio.get("params", {}),
-                })
+                entry_dict["id"] = ""
+            audio_data.append(entry_dict)
 
         # Serialize extra_outputs (remove non-serializable tensors)
         extra = {}
@@ -180,6 +301,7 @@ def get_task_status(task_id: str):
         message=task.message,
         result=result_data,
         error=task.error,
+        error_detail=task.error_detail,
     ))
 
 
@@ -396,8 +518,8 @@ def start_pipeline(
                 422, f"Stage {idx}: invalid type '{stage.type}'"
             )
 
-        # Refine must reference a previous stage (latent input)
-        if stage.type == "refine":
+        # Refine must reference a previous stage OR a stored latent
+        if stage.type == "refine" and not stage.src_latent_id:
             input_idx = (
                 stage.input_stage if stage.input_stage is not None else idx - 1
             )
@@ -408,13 +530,13 @@ def start_pipeline(
                     f"a previous stage (0..{idx - 1})",
                 )
 
-        # Audio-requiring stages need src_audio_id or src_stage
+        # Audio-requiring stages need src_audio_id, src_stage, or src_latent_id
         if stage.type in AUDIO_TYPES:
-            if not stage.src_audio_id and stage.src_stage is None:
+            if not stage.src_audio_id and stage.src_stage is None and not stage.src_latent_id:
                 raise HTTPException(
                     422,
                     f"Stage {idx} ({stage.type}): must provide "
-                    f"src_audio_id or src_stage",
+                    f"src_audio_id, src_stage, or src_latent_id",
                 )
             if stage.src_stage is not None:
                 if stage.src_stage < 0 or stage.src_stage >= idx:
@@ -445,3 +567,172 @@ def start_pipeline(
 
     task_id = task_manager.submit(_run)
     return ApiResponse(data={"task_id": task_id})
+
+
+def _serialize_record(record) -> dict:
+    """Convert a LatentRecord to a JSON-safe dict for API responses."""
+    params = record.params or {}
+    return {
+        "id": record.id,
+        "shape": list(record.shape),
+        "dtype": record.dtype,
+        "model_variant": record.model_variant,
+        "stage_type": record.stage_type,
+        "is_checkpoint": record.is_checkpoint,
+        "checkpoint_step": record.checkpoint_step,
+        "total_steps": record.total_steps,
+        "batch_size": record.batch_size,
+        "created_at": record.created_at,
+        "pinned": record.pinned,
+        "pipeline_id": record.pipeline_id,
+        "stage_index": record.stage_index,
+        "params": params,
+        "lm_metadata": record.lm_metadata,
+        # Derived fields for search/display
+        "caption": params.get("caption", ""),
+        "duration": params.get("duration"),
+        "task_type": params.get("task_type", record.stage_type),
+    }
+
+
+@router.get("/latent/list")
+def list_latents(
+    stage_type: Optional[str] = Query(None),
+    model_variant: Optional[str] = Query(None),
+    is_checkpoint: Optional[bool] = Query(None),
+    pinned: Optional[bool] = Query(None),
+    search: Optional[str] = Query(None, description="Search in caption text"),
+):
+    """List all stored latents with optional filters."""
+    records = latent_store.list_records()
+
+    # Apply filters
+    if stage_type:
+        records = [r for r in records if r.stage_type == stage_type]
+    if model_variant:
+        records = [r for r in records if r.model_variant == model_variant]
+    if is_checkpoint is not None:
+        records = [r for r in records if r.is_checkpoint == is_checkpoint]
+    if pinned is not None:
+        records = [r for r in records if r.pinned == pinned]
+    if search:
+        q = search.lower()
+        records = [
+            r for r in records
+            if q in (r.params or {}).get("caption", "").lower()
+            or q in (r.params or {}).get("lyrics", "").lower()
+        ]
+
+    # Sort newest first
+    records.sort(key=lambda r: r.created_at, reverse=True)
+
+    return ApiResponse(data={
+        "latents": [_serialize_record(r) for r in records],
+        "total": len(records),
+    })
+
+
+@router.post("/latent/{latent_id}/pin")
+def pin_latent(latent_id: str):
+    """Toggle pin on a latent (pinned latents survive TTL cleanup)."""
+    record = latent_store.get_record(latent_id)
+    if record is None:
+        raise HTTPException(404, f"Latent '{latent_id}' not found")
+    new_pinned = not record.pinned
+    if new_pinned:
+        latent_store.pin(latent_id)
+    else:
+        latent_store.unpin(latent_id)
+    return ApiResponse(data={"id": latent_id, "pinned": new_pinned})
+
+
+@router.delete("/latent/{latent_id}")
+def delete_latent(latent_id: str):
+    """Delete a latent and its tensor file."""
+    record = latent_store.get_record(latent_id)
+    if record is None:
+        raise HTTPException(404, f"Latent '{latent_id}' not found")
+    latent_store.delete(latent_id)
+    return ApiResponse(data={"id": latent_id, "deleted": True})
+
+
+@router.get("/latent/{latent_id}/metadata")
+def get_latent_metadata(latent_id: str):
+    """Get metadata for a stored latent without loading tensor."""
+    record = latent_store.get_record(latent_id)
+    if record is None:
+        raise HTTPException(404, f"Latent '{latent_id}' not found")
+
+    return ApiResponse(data={
+        "id": record.id,
+        "shape": list(record.shape),
+        "dtype": record.dtype,
+        "model_variant": record.model_variant,
+        "stage_type": record.stage_type,
+        "is_checkpoint": record.is_checkpoint,
+        "checkpoint_step": record.checkpoint_step,
+        "total_steps": record.total_steps,
+        "params": record.params,
+        "lm_metadata": record.lm_metadata,
+        "batch_size": record.batch_size,
+        "created_at": record.created_at,
+        "pinned": record.pinned,
+    })
+
+
+@router.post("/latent/{latent_id}/decode")
+def decode_latent(
+    latent_id: str,
+    dit=Depends(get_dit_handler),
+):
+    """VAE-decode a stored latent to audio for preview.
+
+    Returns audio ID that can be played via /audio/files/{id}.
+    """
+    if dit.model is None:
+        raise HTTPException(400, "DiT service not initialized (VAE required)")
+
+    record = latent_store.get_record(latent_id)
+    if record is None:
+        raise HTTPException(404, f"Latent '{latent_id}' not found")
+
+    tensor = latent_store.get(latent_id)
+    if tensor is None:
+        raise HTTPException(500, f"Failed to load latent tensor '{latent_id}'")
+
+    # Stored latents are [B, T, D] — transpose to [B, D, T] for VAE decode
+    with torch.inference_mode():
+        with dit._load_model_context("vae"):
+            latents_gpu = (
+                tensor.to(dit.device)
+                .transpose(1, 2)
+                .contiguous()
+                .to(dit.vae.dtype)
+            )
+            audio_tensor = dit.tiled_decode(latents_gpu)  # [B, Channels, Samples]
+            if audio_tensor.dtype != torch.float32:
+                audio_tensor = audio_tensor.float()
+            del latents_gpu
+
+    # Convert first batch item to numpy [Samples, Channels]
+    audio_np = audio_tensor[0].cpu().numpy().T
+
+    # Save to temp file and register in audio_store
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+        sf.write(tmp.name, audio_np, dit.sample_rate, format="wav")
+        temp_path = tmp.name
+
+    entry = audio_store.store_file(temp_path)
+
+    try:
+        os.remove(temp_path)
+    except OSError:
+        pass
+
+    logger.info(f"Decoded latent {latent_id} -> audio {entry.id}")
+
+    return ApiResponse(data={
+        "audio_id": entry.id,
+        "latent_id": latent_id,
+        "sample_rate": dit.sample_rate,
+    })

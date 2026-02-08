@@ -4,6 +4,8 @@ import { Header } from '@/components/layout/Header';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { ToastContainer } from '@/components/common/Toast';
 import { PlayerBar } from '@/components/common/PlayerBar';
+import { LLMAssistModal } from '@/components/common/LLMAssistModal';
+import { LatentBrowserModal } from '@/components/common/LatentBrowserModal';
 
 export const metadata: Metadata = {
   title: 'ACE-Step V1.5',
@@ -21,6 +23,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         </div>
         <ToastContainer />
         <PlayerBar />
+        <LLMAssistModal />
+        <LatentBrowserModal />
       </body>
     </html>
   );

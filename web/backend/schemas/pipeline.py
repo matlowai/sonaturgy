@@ -17,6 +17,7 @@ class PipelineStageConfig(BaseModel):
     # Audio source (for cover/repaint/extract/lego/complete — mutually exclusive)
     src_audio_id: Optional[str] = None  # Uploaded audio UUID from audio_store
     src_stage: Optional[int] = None     # Use output of this previous stage as source audio
+    src_latent_id: Optional[str] = None  # Use stored latent from latent_store
 
     # Cover-specific
     audio_cover_strength: float = 1.0   # 0-1, controls conditioning switch point
@@ -45,6 +46,9 @@ class PipelineStageConfig(BaseModel):
     cfg_interval_start: float = 0.0
     cfg_interval_end: float = 1.0
     timesteps: Optional[List[float]] = None
+
+    # Checkpoint
+    checkpoint_step: Optional[int] = None  # Snapshot xt at this diffusion step
 
     # Output
     preview: bool = False  # VAE-decode this stage for preview audio
