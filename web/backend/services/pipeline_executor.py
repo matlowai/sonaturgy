@@ -342,6 +342,40 @@ def run_pipeline(
         # Store clean latents (CPU) for later stages
         stage_latents[idx] = outputs["target_latents"].detach().cpu()
 
+        # Build params snapshot from shared conditioning + per-stage config
+        stage_params = {
+            # Conditioning
+            "caption": stage.caption or req.caption,
+            "lyrics": stage.lyrics or req.lyrics,
+            "instrumental": req.instrumental,
+            "vocal_language": req.vocal_language,
+            "bpm": req.bpm,
+            "keyscale": req.keyscale,
+            "timesignature": req.timesignature,
+            "duration": req.duration,
+            "instruction": build_stage_instruction(stage),
+            # Stage DiT params
+            "task_type": stage.type,
+            "inference_steps": stage.steps,
+            "guidance_scale": stage.guidance_scale,
+            "shift": stage.shift,
+            "seed": stage.seed,
+            "infer_method": stage.infer_method,
+            "use_adg": stage.use_adg,
+            "cfg_interval_start": stage.cfg_interval_start,
+            "cfg_interval_end": stage.cfg_interval_end,
+            "denoise": stage.denoise,
+            "audio_cover_strength": stage.audio_cover_strength,
+            # LM settings
+            "thinking": req.thinking,
+            "lm_temperature": req.lm_temperature,
+            "lm_cfg_scale": req.lm_cfg_scale,
+            "lm_top_k": req.lm_top_k,
+            "lm_top_p": req.lm_top_p,
+            "lm_negative_prompt": req.lm_negative_prompt,
+            "use_constrained_decoding": req.use_constrained_decoding,
+        }
+
         # Persist in latent_store for cross-run resume
         stage_latent_ids[idx] = latent_store.store(
             tensor=stage_latents[idx],
@@ -351,7 +385,7 @@ def run_pipeline(
                 "is_checkpoint": False,
                 "checkpoint_step": None,
                 "total_steps": stage.steps,
-                "params": {},  # Filled below after params block is built
+                "params": stage_params,
                 "lm_metadata": None,
                 "batch_size": batch_size,
                 "pipeline_id": task_id,

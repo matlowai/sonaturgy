@@ -4,6 +4,7 @@ import { useResultsStore } from '@/stores/resultsStore';
 import { useGenerationStore } from '@/stores/generationStore';
 import { useUIStore } from '@/stores/uiStore';
 import { usePlayerStore } from '@/stores/playerStore';
+import { useLatentBrowserStore } from '@/stores/latentBrowserStore';
 import { useBatchNavigation } from '@/hooks/useBatchNavigation';
 import { t, tReplace } from '@/lib/i18n';
 import { AudioCard } from './AudioCard';
@@ -42,6 +43,12 @@ export function ResultsPanel() {
         <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
           No results yet. Generate music to see results here.
         </p>
+        <button
+          className="btn btn-secondary btn-sm mt-2"
+          onClick={() => useLatentBrowserStore.getState().open()}
+        >
+          Browse Stored Latents
+        </button>
       </div>
     );
   }
@@ -52,7 +59,15 @@ export function ResultsPanel() {
     <div className="space-y-4">
       <div className="card">
         <div className="flex items-center justify-between mb-3">
-          <h2 className="section-title mb-0">{t(language, 'results.title')}</h2>
+          <div className="flex items-center gap-2">
+            <h2 className="section-title mb-0">{t(language, 'results.title')}</h2>
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={() => useLatentBrowserStore.getState().open()}
+            >
+              Latents
+            </button>
+          </div>
           <div className="flex items-center gap-2">
             <button className="btn btn-secondary btn-sm" onClick={goPrev} disabled={currentIndex <= 0}>
               {t(language, 'results.prev_btn')}

@@ -5,6 +5,7 @@ import { useGenerationStore } from '@/stores/generationStore';
 import { useServiceStore } from '@/stores/serviceStore';
 import { useUIStore } from '@/stores/uiStore';
 import { usePlayerStore } from '@/stores/playerStore';
+import { useLatentBrowserStore } from '@/stores/latentBrowserStore';
 import { t } from '@/lib/i18n';
 import { AUDIO_FORMATS, INFER_METHODS } from '@/lib/constants';
 import { Tooltip } from '@/components/common/Tooltip';
@@ -68,7 +69,14 @@ export function AdvancedSettings() {
 
       {open && (
         <div className="mt-3 space-y-4">
-          {/* Resume from Latent */}
+          {/* Browse / Resume from Latent */}
+          <button
+            className="btn btn-secondary btn-sm"
+            onClick={() => useLatentBrowserStore.getState().open()}
+          >
+            Browse Latents
+          </button>
+
           {gen.initLatentId && (
             <div className="border rounded-lg p-3 space-y-2" style={{ borderColor: 'var(--accent)', backgroundColor: 'rgba(59, 130, 246, 0.05)' }}>
               <div className="flex items-center justify-between">

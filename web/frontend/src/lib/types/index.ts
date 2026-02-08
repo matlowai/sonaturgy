@@ -270,6 +270,7 @@ export interface WSMessage {
   message?: string;
   result?: GenerationResult;
   error?: string;
+  error_detail?: string;  // Full traceback when verbose errors enabled
 }
 
 // Pipeline Builder
@@ -363,6 +364,34 @@ export interface PipelineResult {
   final_stage: number;
   time_costs: Record<string, number>;
   success: boolean;
+}
+
+// Latent Browser
+export interface LatentRecord {
+  id: string;
+  shape: number[];
+  dtype: string;
+  model_variant: string;
+  stage_type: string;
+  is_checkpoint: boolean;
+  checkpoint_step: number | null;
+  total_steps: number;
+  batch_size: number;
+  created_at: number;
+  pinned: boolean;
+  pipeline_id?: string;
+  stage_index?: number;
+  params: Record<string, any>;
+  lm_metadata?: Record<string, any> | null;
+  // Derived fields from backend
+  caption: string;
+  duration?: number;
+  task_type: string;
+}
+
+export interface LatentListResponse {
+  latents: LatentRecord[];
+  total: number;
 }
 
 // Batch management

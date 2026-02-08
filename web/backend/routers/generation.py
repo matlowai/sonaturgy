@@ -2,10 +2,11 @@
 
 import os
 import tempfile
+from typing import Optional
 
 import soundfile as sf
 import torch
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from loguru import logger
 
 from web.backend.dependencies import get_dit_handler, get_llm_handler
@@ -91,6 +92,18 @@ def start_generation(
         # Expand to request batch_size
         if req.batch_size > 1:
             tensor = tensor.expand(req.batch_size, -1, -1).contiguous()
+
+        # Force duration to match stored latent — the latent's time dimension
+        # is fixed and must match context_latents prepared by the model.
+        # Derive from tensor shape: latent is [B, T, D] at 25Hz.
+        latent_time_dim = tensor.shape[1]
+        latent_duration = latent_time_dim / 25.0
+        if req.duration <= 0 or abs(req.duration - latent_duration) > 0.5:
+            logger.info(
+                f"[resume] Overriding duration {req.duration} → {latent_duration:.1f}s "
+                f"(from latent shape T={latent_time_dim})"
+            )
+            req.duration = latent_duration
 
         # Renoise for partial denoising (same pattern as pipeline_executor.py)
         if effective_t_start < 1.0 - 1e-6:
@@ -288,6 +301,7 @@ def get_task_status(task_id: str):
         message=task.message,
         result=result_data,
         error=task.error,
+        error_detail=task.error_detail,
     ))
 
 
@@ -553,6 +567,93 @@ def start_pipeline(
 
     task_id = task_manager.submit(_run)
     return ApiResponse(data={"task_id": task_id})
+
+
+def _serialize_record(record) -> dict:
+    """Convert a LatentRecord to a JSON-safe dict for API responses."""
+    params = record.params or {}
+    return {
+        "id": record.id,
+        "shape": list(record.shape),
+        "dtype": record.dtype,
+        "model_variant": record.model_variant,
+        "stage_type": record.stage_type,
+        "is_checkpoint": record.is_checkpoint,
+        "checkpoint_step": record.checkpoint_step,
+        "total_steps": record.total_steps,
+        "batch_size": record.batch_size,
+        "created_at": record.created_at,
+        "pinned": record.pinned,
+        "pipeline_id": record.pipeline_id,
+        "stage_index": record.stage_index,
+        "params": params,
+        "lm_metadata": record.lm_metadata,
+        # Derived fields for search/display
+        "caption": params.get("caption", ""),
+        "duration": params.get("duration"),
+        "task_type": params.get("task_type", record.stage_type),
+    }
+
+
+@router.get("/latent/list")
+def list_latents(
+    stage_type: Optional[str] = Query(None),
+    model_variant: Optional[str] = Query(None),
+    is_checkpoint: Optional[bool] = Query(None),
+    pinned: Optional[bool] = Query(None),
+    search: Optional[str] = Query(None, description="Search in caption text"),
+):
+    """List all stored latents with optional filters."""
+    records = latent_store.list_records()
+
+    # Apply filters
+    if stage_type:
+        records = [r for r in records if r.stage_type == stage_type]
+    if model_variant:
+        records = [r for r in records if r.model_variant == model_variant]
+    if is_checkpoint is not None:
+        records = [r for r in records if r.is_checkpoint == is_checkpoint]
+    if pinned is not None:
+        records = [r for r in records if r.pinned == pinned]
+    if search:
+        q = search.lower()
+        records = [
+            r for r in records
+            if q in (r.params or {}).get("caption", "").lower()
+            or q in (r.params or {}).get("lyrics", "").lower()
+        ]
+
+    # Sort newest first
+    records.sort(key=lambda r: r.created_at, reverse=True)
+
+    return ApiResponse(data={
+        "latents": [_serialize_record(r) for r in records],
+        "total": len(records),
+    })
+
+
+@router.post("/latent/{latent_id}/pin")
+def pin_latent(latent_id: str):
+    """Toggle pin on a latent (pinned latents survive TTL cleanup)."""
+    record = latent_store.get_record(latent_id)
+    if record is None:
+        raise HTTPException(404, f"Latent '{latent_id}' not found")
+    new_pinned = not record.pinned
+    if new_pinned:
+        latent_store.pin(latent_id)
+    else:
+        latent_store.unpin(latent_id)
+    return ApiResponse(data={"id": latent_id, "pinned": new_pinned})
+
+
+@router.delete("/latent/{latent_id}")
+def delete_latent(latent_id: str):
+    """Delete a latent and its tensor file."""
+    record = latent_store.get_record(latent_id)
+    if record is None:
+        raise HTTPException(404, f"Latent '{latent_id}' not found")
+    latent_store.delete(latent_id)
+    return ApiResponse(data={"id": latent_id, "deleted": True})
 
 
 @router.get("/latent/{latent_id}/metadata")

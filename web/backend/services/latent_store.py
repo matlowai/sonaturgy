@@ -1,7 +1,7 @@
 """Latent tensor store with UUID-based IDs and TTL cleanup.
 
-Follows the same pattern as audio_store.py: in-memory dict + flat files on disk.
-Tensors are serialized with safetensors, metadata in companion .json files.
+Metadata lives in LMDB (fast key-value lookups, crash-safe, cross-session).
+Tensors live in safetensors files on disk (LMDB just stores the path).
 """
 
 from __future__ import annotations
@@ -14,11 +14,16 @@ import uuid
 from dataclasses import dataclass, field, asdict
 from typing import Any, Dict, List, Optional, Tuple
 
+import lmdb
 import torch
 from loguru import logger
 from safetensors.torch import save_file, load_file
 
 from web.backend import config
+
+# LMDB map size — 256MB is plenty for metadata-only (no tensors).
+# LMDB won't allocate this upfront; it's a ceiling.
+_LMDB_MAP_SIZE = 256 * 1024 * 1024
 
 
 @dataclass
@@ -44,26 +49,126 @@ class LatentRecord:
     stage_index: Optional[int] = None
 
 
+def _record_to_bytes(record: LatentRecord) -> bytes:
+    """Serialize a LatentRecord to JSON bytes for LMDB storage."""
+    d = asdict(record)
+    d["shape"] = list(d["shape"])  # tuple → list for JSON
+    return json.dumps(d, separators=(",", ":")).encode("utf-8")
+
+
+def _bytes_to_record(data: bytes) -> LatentRecord:
+    """Deserialize JSON bytes from LMDB into a LatentRecord."""
+    meta = json.loads(data)
+    return LatentRecord(
+        id=meta["id"],
+        path=meta["path"],
+        shape=tuple(meta["shape"]),
+        dtype=meta["dtype"],
+        model_variant=meta["model_variant"],
+        stage_type=meta["stage_type"],
+        is_checkpoint=meta["is_checkpoint"],
+        checkpoint_step=meta.get("checkpoint_step"),
+        total_steps=meta["total_steps"],
+        params=meta.get("params", {}),
+        lm_metadata=meta.get("lm_metadata"),
+        batch_size=meta.get("batch_size", 1),
+        schedule=meta.get("schedule"),
+        created_at=meta.get("created_at", 0.0),
+        pinned=meta.get("pinned", False),
+        pipeline_id=meta.get("pipeline_id"),
+        stage_index=meta.get("stage_index"),
+    )
+
+
 class LatentStore:
-    """Manages persistent latent tensors with auto-cleanup."""
+    """Manages persistent latent tensors with LMDB metadata and auto-cleanup."""
 
     def __init__(self):
-        self._records: Dict[str, LatentRecord] = {}
-        self._lock = threading.Lock()
+        os.makedirs(config.LATENT_DIR, exist_ok=True)
+        lmdb_path = os.path.join(config.LATENT_DIR, "metadata.lmdb")
+        self._env = lmdb.open(lmdb_path, map_size=_LMDB_MAP_SIZE)
         self._cleanup_thread: Optional[threading.Thread] = None
         self._running = False
-        os.makedirs(config.LATENT_DIR, exist_ok=True)
+
+        # Migrate any legacy .json companion files into LMDB
+        self._migrate_legacy_json()
+
+    def _migrate_legacy_json(self):
+        """One-time migration: import .json companion files into LMDB, then delete them."""
+        json_files = [
+            f for f in os.listdir(config.LATENT_DIR) if f.endswith(".json")
+        ]
+        if not json_files:
+            return
+
+        migrated = 0
+        with self._env.begin(write=True) as txn:
+            for fname in json_files:
+                latent_id = fname.replace(".json", "")
+                # Skip if already in LMDB
+                if txn.get(latent_id.encode()) is not None:
+                    # Remove the now-redundant JSON file
+                    try:
+                        os.remove(os.path.join(config.LATENT_DIR, fname))
+                    except OSError:
+                        pass
+                    continue
+
+                json_path = os.path.join(config.LATENT_DIR, fname)
+                tensor_path = os.path.join(config.LATENT_DIR, f"{latent_id}.safetensors")
+                if not os.path.exists(tensor_path):
+                    # Orphan JSON with no tensor — clean up
+                    try:
+                        os.remove(json_path)
+                    except OSError:
+                        pass
+                    continue
+
+                try:
+                    with open(json_path) as f:
+                        meta = json.load(f)
+                    record = LatentRecord(
+                        id=meta["id"],
+                        path=meta["path"],
+                        shape=tuple(meta["shape"]),
+                        dtype=meta["dtype"],
+                        model_variant=meta["model_variant"],
+                        stage_type=meta["stage_type"],
+                        is_checkpoint=meta["is_checkpoint"],
+                        checkpoint_step=meta.get("checkpoint_step"),
+                        total_steps=meta["total_steps"],
+                        params=meta.get("params", {}),
+                        lm_metadata=meta.get("lm_metadata"),
+                        batch_size=meta.get("batch_size", 1),
+                        schedule=meta.get("schedule"),
+                        created_at=meta.get("created_at", 0.0),
+                        pinned=meta.get("pinned", False),
+                        pipeline_id=meta.get("pipeline_id"),
+                        stage_index=meta.get("stage_index"),
+                    )
+                    txn.put(latent_id.encode(), _record_to_bytes(record))
+                    migrated += 1
+                except Exception as e:
+                    logger.warning(f"Failed to migrate latent {latent_id}: {e}")
+
+                # Remove the JSON file regardless (it's been imported or is broken)
+                try:
+                    os.remove(json_path)
+                except OSError:
+                    pass
+
+        if migrated:
+            logger.info(f"Migrated {migrated} legacy latent records to LMDB")
 
     def store(self, tensor: torch.Tensor, metadata: Dict[str, Any]) -> str:
-        """Serialize tensor to safetensors, store record, return UUID."""
+        """Serialize tensor to safetensors, store metadata in LMDB, return UUID."""
         latent_id = uuid.uuid4().hex[:12]
         tensor_path = os.path.join(config.LATENT_DIR, f"{latent_id}.safetensors")
-        meta_path = os.path.join(config.LATENT_DIR, f"{latent_id}.json")
 
         # Ensure tensor is on CPU and contiguous
         t = tensor.detach().cpu().contiguous()
 
-        # Save tensor
+        # Save tensor to disk
         save_file({"latent": t}, tensor_path)
 
         record = LatentRecord(
@@ -84,14 +189,9 @@ class LatentStore:
             stage_index=metadata.get("stage_index"),
         )
 
-        # Save metadata to companion JSON
-        meta_dict = asdict(record)
-        meta_dict["shape"] = list(meta_dict["shape"])  # tuple → list for JSON
-        with open(meta_path, "w") as f:
-            json.dump(meta_dict, f)
-
-        with self._lock:
-            self._records[latent_id] = record
+        # Write metadata to LMDB (atomic)
+        with self._env.begin(write=True) as txn:
+            txn.put(latent_id.encode(), _record_to_bytes(record))
 
         logger.debug(
             f"Stored latent {latent_id}: shape={record.shape}, "
@@ -112,80 +212,63 @@ class LatentStore:
             return None
 
     def get_record(self, latent_id: str) -> Optional[LatentRecord]:
-        """Get metadata without loading tensor."""
-        with self._lock:
-            record = self._records.get(latent_id)
-        if record is not None:
-            return record
-
-        # Try loading from disk (e.g., after server restart)
-        meta_path = os.path.join(config.LATENT_DIR, f"{latent_id}.json")
-        tensor_path = os.path.join(config.LATENT_DIR, f"{latent_id}.safetensors")
-        if os.path.exists(meta_path) and os.path.exists(tensor_path):
-            try:
-                with open(meta_path) as f:
-                    meta = json.load(f)
-                record = LatentRecord(
-                    id=meta["id"],
-                    path=meta["path"],
-                    shape=tuple(meta["shape"]),
-                    dtype=meta["dtype"],
-                    model_variant=meta["model_variant"],
-                    stage_type=meta["stage_type"],
-                    is_checkpoint=meta["is_checkpoint"],
-                    checkpoint_step=meta.get("checkpoint_step"),
-                    total_steps=meta["total_steps"],
-                    params=meta.get("params", {}),
-                    lm_metadata=meta.get("lm_metadata"),
-                    batch_size=meta.get("batch_size", 1),
-                    schedule=meta.get("schedule"),
-                    created_at=meta.get("created_at", 0.0),
-                    pinned=meta.get("pinned", False),
-                    pipeline_id=meta.get("pipeline_id"),
-                    stage_index=meta.get("stage_index"),
-                )
-                with self._lock:
-                    self._records[latent_id] = record
-                return record
-            except Exception as e:
-                logger.error(f"Failed to load latent metadata {latent_id}: {e}")
-        return None
+        """Get metadata from LMDB without loading tensor."""
+        with self._env.begin() as txn:
+            data = txn.get(latent_id.encode())
+        if data is None:
+            return None
+        try:
+            return _bytes_to_record(data)
+        except Exception as e:
+            logger.error(f"Failed to deserialize latent record {latent_id}: {e}")
+            return None
 
     def pin(self, latent_id: str) -> bool:
         """Mark latent as pinned (survives TTL cleanup)."""
-        with self._lock:
-            record = self._records.get(latent_id)
-            if record is None:
+        with self._env.begin(write=True) as txn:
+            data = txn.get(latent_id.encode())
+            if data is None:
                 return False
+            record = _bytes_to_record(data)
             record.pinned = True
-        # Update JSON on disk
-        meta_path = os.path.join(config.LATENT_DIR, f"{latent_id}.json")
-        if os.path.exists(meta_path):
-            try:
-                with open(meta_path) as f:
-                    meta = json.load(f)
-                meta["pinned"] = True
-                with open(meta_path, "w") as f:
-                    json.dump(meta, f)
-            except Exception:
-                pass
+            txn.put(latent_id.encode(), _record_to_bytes(record))
+        return True
+
+    def unpin(self, latent_id: str) -> bool:
+        """Remove pin from a latent (will be cleaned up by TTL)."""
+        with self._env.begin(write=True) as txn:
+            data = txn.get(latent_id.encode())
+            if data is None:
+                return False
+            record = _bytes_to_record(data)
+            record.pinned = False
+            txn.put(latent_id.encode(), _record_to_bytes(record))
         return True
 
     def delete(self, latent_id: str) -> None:
         """Explicitly remove a latent and its files."""
-        with self._lock:
-            record = self._records.pop(latent_id, None)
-        if record:
-            for path in [record.path, record.path.replace(".safetensors", ".json")]:
+        with self._env.begin(write=True) as txn:
+            data = txn.get(latent_id.encode())
+            if data is not None:
+                record = _bytes_to_record(data)
+                txn.delete(latent_id.encode())
+                # Remove tensor file
                 try:
-                    os.remove(path)
+                    os.remove(record.path)
                 except OSError:
                     pass
 
     def list_records(self) -> List[LatentRecord]:
         """List all stored latents (metadata only, no tensors)."""
-        with self._lock:
-            return list(self._records.values())
+        records = []
+        with self._env.begin() as txn:
+            cursor = txn.cursor()
+            for _key, value in cursor:
+                try:
+                    records.append(_bytes_to_record(value))
+                except Exception:
+                    continue
+        return records
 
     def start_cleanup(self):
         self._running = True
@@ -193,13 +276,19 @@ class LatentStore:
             target=self._cleanup_loop, daemon=True
         )
         self._cleanup_thread.start()
+        count = self._count()
         logger.info(
             f"Latent store started (dir={config.LATENT_DIR}, "
-            f"ttl={config.LATENT_TTL_HOURS}h)"
+            f"ttl={config.LATENT_TTL_HOURS}h, records={count})"
         )
 
     def stop_cleanup(self):
         self._running = False
+
+    def _count(self) -> int:
+        """Count total records in LMDB."""
+        with self._env.begin() as txn:
+            return txn.stat()["entries"]
 
     def _cleanup_loop(self):
         while self._running:
@@ -212,25 +301,33 @@ class LatentStore:
     def _do_cleanup(self):
         ttl = config.LATENT_TTL_HOURS * 3600
         now = time.time()
-        expired = []
-        with self._lock:
-            for lid, record in list(self._records.items()):
+        expired_paths = []
+
+        # Single write txn — avoids TOCTOU race with pin()
+        with self._env.begin(write=True) as txn:
+            cursor = txn.cursor()
+            for key, value in cursor:
+                try:
+                    record = _bytes_to_record(value)
+                except Exception:
+                    continue
                 if record.pinned:
                     continue
                 if now - record.created_at > ttl:
-                    expired.append(lid)
-                    for path in [
-                        record.path,
-                        record.path.replace(".safetensors", ".json"),
-                    ]:
-                        try:
-                            os.remove(path)
-                        except OSError:
-                            pass
-            for lid in expired:
-                del self._records[lid]
-        if expired:
-            logger.info(f"Cleaned up {len(expired)} expired latents")
+                    expired_paths.append(record.path)
+                    cursor.delete()
+
+        if not expired_paths:
+            return
+
+        # Remove tensor files (outside txn — not critical if some fail)
+        for path in expired_paths:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+        logger.info(f"Cleaned up {len(expired_paths)} expired latents")
 
 
 latent_store = LatentStore()

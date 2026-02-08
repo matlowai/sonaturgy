@@ -12,7 +12,7 @@ import {
   BPM_MIN, BPM_MAX, DURATION_MAX,
 } from '@/lib/constants';
 import { AudioUpload } from '@/components/common/AudioUpload';
-import { LLMAssist } from '@/components/common/LLMAssist';
+import { useLLMAssistStore } from '@/stores/llmAssistStore';
 import * as api from '@/lib/api';
 import { AutoTextarea } from '@/components/common/AutoTextarea';
 import type { AnalyzeResponse } from '@/lib/types';
@@ -23,6 +23,7 @@ export function CustomMode() {
   const { language } = useUIStore();
   const { formatCaption } = useGeneration();
   const { addToast } = useUIStore();
+  const { open: openAssist } = useLLMAssistStore();
 
   // LLM Preview state
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -222,22 +223,6 @@ export function CustomMode() {
         )}
       </div>
 
-      {/* AI Assist */}
-      <LLMAssist
-        onApply={(data) => {
-          gen.setFields({
-            caption: data.caption,
-            lyrics: data.lyrics,
-            bpm: data.bpm,
-            keyscale: data.keyscale,
-            timesignature: data.timesignature,
-            duration: data.duration,
-            vocalLanguage: data.vocalLanguage,
-            instrumental: data.instrumental,
-            isFormatCaption: true,
-          });
-        }}
-      />
 
       {/* Caption + Lyrics */}
       <div className="card space-y-3">
@@ -245,6 +230,30 @@ export function CustomMode() {
           <div className="flex items-center justify-between">
             <label className="label">{t(language, 'generation.caption_label')}</label>
             <div className="flex gap-1">
+              {status.llm_initialized && (
+                <button
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => openAssist(
+                    { kind: 'custom' },
+                    (data) => {
+                      gen.setFields({
+                        caption: data.caption,
+                        lyrics: data.lyrics,
+                        bpm: data.bpm,
+                        keyscale: data.keyscale,
+                        timesignature: data.timesignature,
+                        duration: data.duration,
+                        vocalLanguage: data.vocalLanguage,
+                        instrumental: data.instrumental,
+                        isFormatCaption: true,
+                      });
+                    }
+                  )}
+                  style={{ color: 'var(--accent)' }}
+                >
+                  AI Assist
+                </button>
+              )}
               {status.llm_initialized && (
                 <button
                   className="btn btn-secondary btn-sm"

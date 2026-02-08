@@ -6,6 +6,7 @@ import type {
   FormatRequest,
   AnalyzeRequest,
   AnalyzeResponse,
+  LatentListResponse,
 } from './types';
 
 const API_BASE = '/api';
@@ -110,6 +111,26 @@ export const decodeLatent = (latentId: string) =>
     `/generation/latent/${latentId}/decode`,
     { method: 'POST' }
   );
+export const listLatents = (filters?: {
+  stage_type?: string;
+  model_variant?: string;
+  is_checkpoint?: boolean;
+  pinned?: boolean;
+  search?: string;
+}) => {
+  const params = new URLSearchParams();
+  if (filters?.stage_type) params.set('stage_type', filters.stage_type);
+  if (filters?.model_variant) params.set('model_variant', filters.model_variant);
+  if (filters?.is_checkpoint !== undefined) params.set('is_checkpoint', String(filters.is_checkpoint));
+  if (filters?.pinned !== undefined) params.set('pinned', String(filters.pinned));
+  if (filters?.search) params.set('search', filters.search);
+  const query = params.toString();
+  return request<LatentListResponse>(`/generation/latent/list${query ? '?' + query : ''}`);
+};
+export const pinLatent = (latentId: string) =>
+  request<{ id: string; pinned: boolean }>(`/generation/latent/${latentId}/pin`, { method: 'POST' });
+export const deleteLatent = (latentId: string) =>
+  request<{ id: string; deleted: boolean }>(`/generation/latent/${latentId}`, { method: 'DELETE' });
 export const convertToCodes = (audioId: string) =>
   request<{ audio_codes: string }>('/audio/convert-to-codes', {
     method: 'POST',

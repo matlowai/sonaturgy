@@ -9,7 +9,15 @@
 
 ## Last Session Summary (2026-02-07)
 
-**Completed this session (Phase 6):**
+**Completed this session (Phase 7a + bugfix):**
+1. **Modal LLM Assist** — Refactored inline `LLMAssist` into a global modal overlay (`LLMAssistModal.tsx`) + Zustand store (`llmAssistStore.ts`). Singleton renders in `layout.tsx`. Any binding point calls `openAssist(label, callback)` to open, "Use" routes result to the caller's target. Old `LLMAssist.tsx` deleted.
+2. **Universal Binding Points** — AI Assist trigger buttons on: CustomMode caption toolbar, PipelineMode Conditioning header, each StageBlock header. StageBlock binding splits: caption/lyrics → stage overrides, metadata → shared `setFieldsIfEmpty()`.
+3. **Resume Latent Duration Fix** — Resume from latent crashed with `RuntimeError: Sizes of tensors must match` when request duration differed from stored latent. Fix: derive duration from `tensor.shape[1] / 25.0` and force-override `req.duration` in `routers/generation.py`.
+4. **Files**: NEW `llmAssistStore.ts`, `LLMAssistModal.tsx`. DELETED `LLMAssist.tsx`. MODIFIED `layout.tsx`, `CustomMode.tsx`, `PipelineMode.tsx`, `StageBlock.tsx`, `routers/generation.py`.
+
+**Next up (P0):** Restart backend to test resume fix. Then: DRY `<LMSettingsPanel>` + `<LLMPreviewPanel>` extraction (Phase 7 remaining), missing pipeline LM fields, per-stage checkpoint_step UI. Surface `result.success === false` errors to frontend toast.
+
+**Previous (same branch, Phase 6):**
 1. **Pipeline LM Settings** — Added thinking, lm_temperature, lm_cfg_scale, lm_top_k/p, negative prompt, CoT toggles, constrained decoding to Pipeline mode. Backend schema already had these fields; added frontend types, store state, UI section in PipelineMode.tsx, wired into request builder.
 2. **Collapsible StageBlock** — Diffusion params grid collapsed by default with summary line ("8 steps, shift 3.0, ode"). Preview checkbox pulled out to always-visible.
 3. **Backend Latent Endpoints** — `GET /latent/{id}/metadata` (shape, model, caption, timestamps) + `POST /latent/{id}/decode` (VAE decode → playable audio). Fixed shape transpose `[B,T,D]→[B,D,T]` and proper `_load_model_context("vae")`.

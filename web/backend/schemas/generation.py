@@ -84,6 +84,7 @@ class TaskStatusResponse(BaseModel):
     message: str = ""
     result: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
+    error_detail: Optional[str] = None  # Full traceback when verbose errors enabled
 
 
 class CreateSampleRequest(BaseModel):

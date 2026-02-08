@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+import traceback
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -11,6 +12,8 @@ from enum import Enum
 from typing import Any, Callable, Dict, List, Optional
 
 from loguru import logger
+
+from web.backend import config
 
 
 class TaskStatus(str, Enum):
@@ -28,6 +31,7 @@ class Task:
     message: str = ""
     result: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
+    error_detail: Optional[str] = None  # Full traceback when verbose errors enabled
     created_at: float = field(default_factory=time.time)
     extra_outputs: Optional[Dict[str, Any]] = None
 
@@ -69,10 +73,14 @@ class TaskManager:
                 logger.exception(f"Task {task_id} failed")
                 task.status = TaskStatus.ERROR
                 task.error = str(e)
+                tb = traceback.format_exc()
+                if config.VERBOSE_ERRORS:
+                    task.error_detail = tb
                 self._broadcast_sync(task_id, {
                     "type": "error",
                     "task_id": task_id,
                     "error": str(e),
+                    **({"error_detail": tb} if config.VERBOSE_ERRORS else {}),
                 })
 
         self._executor.submit(_run)

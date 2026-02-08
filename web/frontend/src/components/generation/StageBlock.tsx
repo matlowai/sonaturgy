@@ -2,7 +2,9 @@
 
 import { usePipelineStore, getDefaultStepsForModel, STAGE_DEFAULTS } from '@/stores/pipelineStore';
 import { useGenerationStore } from '@/stores/generationStore';
+import { useServiceStore } from '@/stores/serviceStore';
 import { useUIStore } from '@/stores/uiStore';
+import { useLLMAssistStore } from '@/stores/llmAssistStore';
 import { INFER_METHODS, TRACK_NAMES } from '@/lib/constants';
 import { stageToCustom } from '@/lib/stageConversion';
 import { useState } from 'react';
@@ -51,7 +53,9 @@ interface StageBlockProps {
 export function StageBlock({ stage, index, totalStages }: StageBlockProps) {
   const { updateStage, removeStage } = usePipelineStore();
   const gen = useGenerationStore();
+  const { status } = useServiceStore();
   const { addToast } = useUIStore();
+  const { open: openAssist } = useLLMAssistStore();
 
   const handleSendToCustom = () => {
     const pipe = usePipelineStore.getState();
@@ -151,6 +155,35 @@ export function StageBlock({ stage, index, totalStages }: StageBlockProps) {
           <Tooltip text={help.HELP_STAGE_TYPE} />
         </div>
         <div className="flex items-center gap-1">
+          {status.llm_initialized && (
+            <button
+              className="text-xs px-2 py-1 rounded hover:opacity-70"
+              style={{ color: 'var(--accent)' }}
+              onClick={() => openAssist(
+                { kind: 'pipeline-stage', stageIndex: index },
+                (data) => {
+                  // Caption/lyrics go to stage overrides
+                  updateStage(index, {
+                    caption: data.caption || undefined,
+                    lyrics: data.lyrics || undefined,
+                  });
+                  setShowCaptionOverride(true);
+                  // Metadata goes to shared conditioning (only if empty)
+                  usePipelineStore.getState().setFieldsIfEmpty({
+                    bpm: data.bpm,
+                    keyscale: data.keyscale,
+                    timesignature: data.timesignature,
+                    duration: data.duration,
+                    vocalLanguage: data.vocalLanguage,
+                    instrumental: data.instrumental,
+                  });
+                }
+              )}
+              title="Generate caption, lyrics, and metadata with AI"
+            >
+              AI Assist
+            </button>
+          )}
           <button
             className="text-xs px-2 py-1 rounded hover:opacity-70"
             style={{ color: 'var(--accent)' }}

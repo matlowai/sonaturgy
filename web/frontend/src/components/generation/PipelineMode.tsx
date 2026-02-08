@@ -8,7 +8,7 @@ import { useUIStore } from '@/stores/uiStore';
 import { StageBlock } from './StageBlock';
 import { PromptLibrary } from './PromptLibrary';
 import { AutoTextarea } from '@/components/common/AutoTextarea';
-import { LLMAssist } from '@/components/common/LLMAssist';
+import { useLLMAssistStore } from '@/stores/llmAssistStore';
 import { Spinner } from '@/components/common/Spinner';
 import {
   VALID_LANGUAGES, LANGUAGE_NAMES, TIME_SIGNATURES,
@@ -24,6 +24,7 @@ export function PipelineMode() {
   const results = useResultsStore();
   const { status } = useServiceStore();
   const { addToast } = useUIStore();
+  const { open: openAssist } = useLLMAssistStore();
   const [saveName, setSaveName] = useState('');
   const [showSaveInput, setShowSaveInput] = useState(false);
   const [importing, setImporting] = useState(false);
@@ -164,23 +165,32 @@ export function PipelineMode() {
 
   return (
     <div className="space-y-4">
-      {/* AI Assist */}
-      <LLMAssist
-        onApply={(data) => {
-          pipe.setField('caption', data.caption);
-          pipe.setField('lyrics', data.lyrics);
-          pipe.setField('bpm', data.bpm);
-          pipe.setField('keyscale', data.keyscale);
-          pipe.setField('timesignature', data.timesignature);
-          pipe.setField('duration', data.duration);
-          pipe.setField('vocalLanguage', data.vocalLanguage);
-          pipe.setField('instrumental', data.instrumental);
-        }}
-      />
-
       {/* Shared Conditioning */}
       <div className="card space-y-3">
-        <h3 className="section-title">Conditioning</h3>
+        <div className="flex items-center justify-between">
+          <h3 className="section-title mb-0">Conditioning</h3>
+          {status.llm_initialized && (
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={() => openAssist(
+                { kind: 'pipeline-shared' },
+                (data) => {
+                  pipe.setField('caption', data.caption);
+                  pipe.setField('lyrics', data.lyrics);
+                  pipe.setField('bpm', data.bpm);
+                  pipe.setField('keyscale', data.keyscale);
+                  pipe.setField('timesignature', data.timesignature);
+                  pipe.setField('duration', data.duration);
+                  pipe.setField('vocalLanguage', data.vocalLanguage);
+                  pipe.setField('instrumental', data.instrumental);
+                }
+              )}
+              style={{ color: 'var(--accent)' }}
+            >
+              AI Assist
+            </button>
+          )}
+        </div>
 
         <div>
           <label className="label">Caption</label>
